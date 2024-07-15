@@ -56,6 +56,7 @@ class BalanceIndexer:
 
     def setup_db(self):
         with self.engine.connect() as conn:
+            conn.execution_options(isolation_level="AUTOCOMMIT")
             try:
                 # Check if TimescaleDB extension is already installed
                 result = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb';"))
