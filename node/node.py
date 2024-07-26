@@ -8,7 +8,7 @@ from .node_utils import (
     construct_redeem_script,
     hash_redeem_script,
     create_p2sh_address,
-    Transaction, SATOSHI, VOUT, VIN
+    Transaction, SATOSHI, VOUT, VIN, derive_address
 )
 from setup_logger import logger_extra_data
 
@@ -78,40 +78,27 @@ class BitcoinNode(Node):
             rpc_connection._AuthServiceProxy__conn.close()  # Close the connection
 
     def get_address_and_amount_by_txn_id_and_vout_id(self, txn_id: str, vout_id: str):
-        # call rpc if not in hash table
-        if (txn_id, vout_id) not in self.tx_out_hash_table[txn_id[:3]]:
-            # logger.info(f"No entry is found in tx_out hash table: (tx_id, vout_id): ({txn_id}, {vout_id})")
-            rpc_connection = AuthServiceProxy(self.node_rpc_url)
-            try:
-                txn_data = rpc_connection.getrawtransaction(str(txn_id), 1)
-                vout = next((x for x in txn_data['vout'] if str(x['n']) == vout_id), None)
-                amount = int(vout['value'] * 100000000)
-                address = vout["scriptPubKey"].get("address", "")
-                script_pub_key_asm = vout["scriptPubKey"].get("asm", "")
-                if not address:
-                    addresses = vout["scriptPubKey"].get("addresses", [])
-                    if addresses:
-                        address = addresses[0]
-                    elif "OP_CHECKSIG" in script_pub_key_asm:
-                        pubkey = script_pub_key_asm.split()[0]
-                        address = pubkey_to_address(pubkey)
-                    elif "OP_CHECKMULTISIG" in script_pub_key_asm:
-                        pubkeys = script_pub_key_asm.split()[1:-2]
-                        m = int(script_pub_key_asm.split()[0])
-                        redeem_script = construct_redeem_script(pubkeys, m)
-                        hashed_script = hash_redeem_script(redeem_script)
-                        address = create_p2sh_address(hashed_script)
-                    else:
-                        address = f"unknown-{txn_id}"
-                return address, amount
-            except Exception as e:
-                address = f"unknown-{txn_id}"
-                return address, 0
-            finally:
-                rpc_connection._AuthServiceProxy__conn.close()  # Close the connection
-        else:  # get from hash table if exists
+        # Check if the data is in the hash table
+        if (txn_id, vout_id) in self.tx_out_hash_table[txn_id[:3]]:
             address, amount = self.tx_out_hash_table[txn_id[:3]][(txn_id, vout_id)]
             return address, int(amount)
+
+        rpc_connection = AuthServiceProxy(self.node_rpc_url)
+        try:
+            txn_data = rpc_connection.getrawtransaction(str(txn_id), 1)
+            vout = next((x for x in txn_data['vout'] if str(x['n']) == vout_id), None)
+
+            if vout is None:
+                return f"unknown-{txn_id}", 0
+
+            amount = int(vout['value'] * 100000000)
+            address = derive_address(vout["scriptPubKey"], vout["scriptPubKey"].get("asm", ""))
+
+            return address, amount
+        except Exception as e:
+            return f"unknown-{txn_id}", 0
+        finally:
+            rpc_connection._AuthServiceProxy__conn.close()
 
     def get_txn_data_by_id(self, txn_id: str):
         try:
