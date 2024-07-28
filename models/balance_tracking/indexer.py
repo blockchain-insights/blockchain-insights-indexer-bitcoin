@@ -56,7 +56,7 @@ def index_block(_bitcoin_node, _balance_indexer, block_height):
     return success
 
 
-def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 1):
+def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 0):
     global shutdown_flag
 
     skip_blocks = 6
