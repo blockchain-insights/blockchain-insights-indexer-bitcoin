@@ -77,6 +77,13 @@ def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
     hex_script = script_pub_key.get("hex", "")
 
     try:
+        if script_type == "nulldata":
+            # Handle OP_RETURN (nulldata) scripts
+            asm_parts = script_pub_key_asm.split()
+            if asm_parts[0] == "OP_RETURN":
+                data = " ".join(asm_parts[1:])
+                return f"OP_RETURN_{data[:20]}..."  # Return first 20 chars of data
+
         if script_type == "pubkey":
             pubkey = script_pub_key_asm.split()[0]
             return pubkey_to_address(pubkey)
@@ -240,28 +247,18 @@ def parse_block_data(block_data):
                 tx.is_coinbase = "coinbase" in vin_data
 
             for vout_data in tx_data["vout"]:
-                script_type = vout_data["scriptPubKey"].get("type", "")
-                if script_type == "nulldata":
-                    continue  # Skip OP_RETURN outputs
-
+                script_pub_key = vout_data["scriptPubKey"]
+                script_pub_key_asm = script_pub_key.get("asm", "")
                 value_satoshi = int(Decimal(vout_data["value"]) * SATOSHI)
-                n = vout_data["n"]
-                script_pub_key_asm = vout_data["scriptPubKey"].get("asm", "")
 
-                try:
-                    address = derive_address(vout_data["scriptPubKey"], script_pub_key_asm)
-                except Exception as e:
-                    print(f"Error deriving address for vout {n} in tx {tx_id}: {e}")
-                    print(f"scriptPubKey: {vout_data['scriptPubKey']}")
-                    print(f"scriptPubKey ASM: {script_pub_key_asm}")
-                    address = f"ERROR_DERIVING_ADDRESS_{script_type}"
+                address = derive_address(script_pub_key, script_pub_key_asm)
 
                 vout = VOUT(
-                    vout_id=n,
+                    vout_id=vout_data["n"],
                     value_satoshi=value_satoshi,
                     script_pub_key=script_pub_key_asm,
                     is_spent=False,
-                    address=address,
+                    address=address
                 )
                 tx.vouts.append(vout)
 
