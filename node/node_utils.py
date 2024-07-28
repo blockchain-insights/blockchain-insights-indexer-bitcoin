@@ -105,7 +105,7 @@ def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
 
         # Handle "cosmic ray" transactions with long, repeating OP_CHECKSIG
         if script_pub_key_asm.count("OP_CHECKSIG") > 100:
-            return f"UNKNOWN_{script_pub_key_asm[:20]}..."
+            return f"UNKNOWN_{script_pub_key_asm[:30]}"
 
         # fallback
         if "OP_CHECKSIG" in script_pub_key_asm:
@@ -128,7 +128,7 @@ def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
         print(f"Script type: {script_type}")
         print(f"Script pub key: {script_pub_key}")
         print(f"Script pub key ASM: {script_pub_key_asm[:100]}...")  # Print only the first 100 characters
-        return f"UNKNOWN_{script_type}"
+        return f"UNKNOWN_{script_pub_key_asm[:30]}"
 
 
 def construct_redeem_script(pubkeys, m):
