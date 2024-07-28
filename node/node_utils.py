@@ -7,6 +7,9 @@ from decimal import Decimal, getcontext
 
 
 def pubkey_to_address(pubkey: str) -> str:
+    if not all(c in '0123456789abcdefABCDEF' for c in pubkey):
+        raise ValueError(f"Invalid pubkey: {pubkey}. Contains non-hexadecimal characters.")
+
     # Step 1: SHA-256 hashing on the public key
     sha256_result = SHA256.new(bytes.fromhex(pubkey)).digest()
 
@@ -38,11 +41,28 @@ def script_to_p2sh_address(script: str, mainnet=True) -> str:
 
 
 def script_to_p2pkh_address(script: str, mainnet=True) -> str:
-    pubkey_hash = script.split()[2]
-    version_byte = b"\x00" if mainnet else b"\x6f"
-    payload = version_byte + binascii.unhexlify(pubkey_hash)
-    checksum = SHA256.new(SHA256.new(payload).digest()).digest()[:4]
-    return base58.b58encode(payload + checksum).decode()
+    try:
+        # Check if the script is unusually long
+        if len(script) > 50:  # Normal P2PKH script is 50 characters
+            # Extract only the relevant part of the script
+            script = script[:50]
+
+        if not script.startswith("76a914"):  # OP_DUP OP_HASH160
+            raise ValueError(f"Script does not start with P2PKH pattern: {script[:10]}...")
+
+        pubkey_hash = script[6:46]
+
+        if len(pubkey_hash) != 40:  # 20 bytes in hex = 40 characters
+            raise ValueError(f"Invalid pubkey hash length: {pubkey_hash}")
+
+        version_byte = b"\x00" if mainnet else b"\x6f"
+        payload = version_byte + binascii.unhexlify(pubkey_hash)
+        checksum = SHA256.new(SHA256.new(payload).digest()).digest()[:4]
+        return base58.b58encode(payload + checksum).decode()
+    except Exception as e:
+        print(f"Error in script_to_p2pkh_address: {e}")
+        print(f"Script (truncated): {script[:50]}...")
+        return f"INVALID_P2PKH_SCRIPT_{script[:10]}"
 
 
 def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
@@ -54,34 +74,54 @@ def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
     if "addresses" in script_pub_key and script_pub_key["addresses"]:
         return script_pub_key["addresses"][0]
 
-    if script_type == "pubkey":
-        pubkey = script_pub_key_asm.split()[0]
-        return pubkey_to_address(pubkey)
+    hex_script = script_pub_key.get("hex", "")
 
-    if script_type == "pubkeyhash":
-        return script_to_p2pkh_address(script_pub_key["hex"])
+    try:
+        if script_type == "pubkey":
+            pubkey = script_pub_key_asm.split()[0]
+            return pubkey_to_address(pubkey)
 
-    if script_type == "scripthash":
-        return script_to_p2sh_address(script_pub_key["hex"])
+        if script_type == "pubkeyhash" or (script_type == "" and hex_script.startswith("76a914")):
+            return script_to_p2pkh_address(hex_script)
 
-    if script_type == "multisig":
-        return script_to_p2sh_address(script_pub_key["hex"])
+        if script_type == "scripthash" or (script_type == "" and hex_script.startswith("a914")):
+            return script_to_p2sh_address(hex_script)
 
-    if script_type == "witness_v0_keyhash":
-        return script_pub_key.get("address", "")  # Bech32 address should be provided
+        if script_type == "multisig":
+            return script_to_p2sh_address(hex_script)
 
-    if script_type == "witness_v0_scripthash":
-        return script_pub_key.get("address", "")  # Bech32 address should be provided
+        if script_type == "witness_v0_keyhash":
+            return script_pub_key.get("address", "")  # Bech32 address should be provided
 
-    # fallback
-    if "OP_CHECKSIG" in script_pub_key_asm:
-        pubkey = script_pub_key_asm.split()[0]
-        return pubkey_to_address(pubkey)
-    elif "OP_CHECKMULTISIG" in script_pub_key_asm:
-        return script_to_p2sh_address(script_pub_key["hex"])
+        if script_type == "witness_v0_scripthash":
+            return script_pub_key.get("address", "")  # Bech32 address should be provided
 
-    # return a placeholder if address isn't interpretable
-    return f"UNKNOWN_{script_type}"
+        # Handle "cosmic ray" transactions with long, repeating OP_CHECKSIG
+        if script_pub_key_asm.count("OP_CHECKSIG") > 100:
+            return f"UNKNOWN_{script_pub_key_asm[:20]}..."
+
+        # fallback
+        if "OP_CHECKSIG" in script_pub_key_asm:
+            asm_parts = script_pub_key_asm.split()
+            if len(asm_parts) == 2 and asm_parts[1] == "OP_CHECKSIG":
+                # This is likely a P2PK script
+                pubkey = asm_parts[0]
+                return pubkey_to_address(pubkey)
+            elif "OP_DUP OP_HASH160" in script_pub_key_asm and "OP_EQUALVERIFY OP_CHECKSIG" in script_pub_key_asm:
+                # This is likely a P2PKH script
+                return script_to_p2pkh_address(hex_script)
+        elif "OP_CHECKMULTISIG" in script_pub_key_asm:
+            return script_to_p2sh_address(hex_script)
+
+        # If we've reached this point, we couldn't derive an address
+        raise ValueError(f"Unable to derive address for script type: {script_type}")
+
+    except Exception as e:
+        print(f"Error in derive_address: {e}")
+        print(f"Script type: {script_type}")
+        print(f"Script pub key: {script_pub_key}")
+        print(f"Script pub key ASM: {script_pub_key_asm[:100]}...")  # Print only the first 100 characters
+        return f"UNKNOWN_{script_type}"
 
 
 def construct_redeem_script(pubkeys, m):
@@ -175,49 +215,59 @@ def parse_block_data(block_data):
     )
 
     for tx_data in block_data["tx"]:
-        tx_id = tx_data["txid"]
-        fee = Decimal(tx_data.get("fee", 0))
-        fee_satoshi = int(fee * SATOSHI)
-        tx_timestamp = int(tx_data.get("time", timestamp))
+        try:
+            tx_id = tx_data["txid"]
+            fee = Decimal(tx_data.get("fee", 0))
+            fee_satoshi = int(fee * SATOSHI)
+            tx_timestamp = int(tx_data.get("time", timestamp))
 
-        tx = Transaction(
-            tx_id=tx_id,
-            block_height=block_height,
-            timestamp=tx_timestamp,
-            fee_satoshi=fee_satoshi,
-        )
-
-        for vin_data in tx_data["vin"]:
-            vin = VIN(
-                tx_id=vin_data.get("txid", 0),
-                vin_id=vin_data.get("sequence", 0),
-                vout_id=vin_data.get("vout", 0),
-                script_sig=vin_data.get("scriptSig", {}).get("asm", ""),
-                sequence=vin_data.get("sequence", 0),
+            tx = Transaction(
+                tx_id=tx_id,
+                block_height=block_height,
+                timestamp=tx_timestamp,
+                fee_satoshi=fee_satoshi,
             )
-            tx.vins.append(vin)
-            tx.is_coinbase = "coinbase" in vin_data
 
-        for vout_data in tx_data["vout"]:
-            script_type = vout_data["scriptPubKey"].get("type", "")
-            if script_type == "nulldata":
-                continue  # Skip OP_RETURN outputs
+            for vin_data in tx_data["vin"]:
+                vin = VIN(
+                    tx_id=vin_data.get("txid", 0),
+                    vin_id=vin_data.get("sequence", 0),
+                    vout_id=vin_data.get("vout", 0),
+                    script_sig=vin_data.get("scriptSig", {}).get("asm", ""),
+                    sequence=vin_data.get("sequence", 0),
+                )
+                tx.vins.append(vin)
+                tx.is_coinbase = "coinbase" in vin_data
 
-            value_satoshi = int(Decimal(vout_data["value"]) * SATOSHI)
-            n = vout_data["n"]
-            script_pub_key_asm = vout_data["scriptPubKey"].get("asm", "")
+            for vout_data in tx_data["vout"]:
+                script_type = vout_data["scriptPubKey"].get("type", "")
+                if script_type == "nulldata":
+                    continue  # Skip OP_RETURN outputs
 
-            address = derive_address(vout_data["scriptPubKey"], script_pub_key_asm)
+                value_satoshi = int(Decimal(vout_data["value"]) * SATOSHI)
+                n = vout_data["n"]
+                script_pub_key_asm = vout_data["scriptPubKey"].get("asm", "")
 
-            vout = VOUT(
-                vout_id=n,
-                value_satoshi=value_satoshi,
-                script_pub_key=script_pub_key_asm,
-                is_spent=False,
-                address=address,
-            )
-            tx.vouts.append(vout)
+                try:
+                    address = derive_address(vout_data["scriptPubKey"], script_pub_key_asm)
+                except Exception as e:
+                    print(f"Error deriving address for vout {n} in tx {tx_id}: {e}")
+                    print(f"scriptPubKey: {vout_data['scriptPubKey']}")
+                    print(f"scriptPubKey ASM: {script_pub_key_asm}")
+                    address = f"ERROR_DERIVING_ADDRESS_{script_type}"
 
-        block.transactions.append(tx)
+                vout = VOUT(
+                    vout_id=n,
+                    value_satoshi=value_satoshi,
+                    script_pub_key=script_pub_key_asm,
+                    is_spent=False,
+                    address=address,
+                )
+                tx.vouts.append(vout)
+
+            block.transactions.append(tx)
+        except Exception as e:
+            print(f"Error processing transaction in block {block_height}: {e}")
+            print(f"Transaction data: {tx_data}")
 
     return block
