@@ -107,6 +107,9 @@ def derive_address(script_pub_key: dict, script_pub_key_asm: str) -> str:
         if script_pub_key_asm.count("OP_CHECKSIG") > 100:
             return f"UNKNOWN_{script_pub_key_asm[:30]}"
 
+        if script_type == "nonstandard":
+            return f"NONSTANDARD_{hex_script[:20]}..."
+
         # fallback
         if "OP_CHECKSIG" in script_pub_key_asm:
             asm_parts = script_pub_key_asm.split()
