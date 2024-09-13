@@ -1,14 +1,9 @@
 # Bitcoin Indexer
 
 ## Hardware Requirements
-- All in one: 
-  - ~8TB+ SSD/nvme storage, 32+ CPU cores, 1.5TB+ RAM
-- Separate:
-  - Indexer and MemGraph: 1.5TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
-  - Bitcoin full node: 1TB+ SSD/nvme storage, 8+ CPU cores, 64GB+ RAM
-  - Miner: ~32GB SSD storage, 8+ CPU cores, 64GB+ RAM
-- Custom:
-  - Find your own best configuration ;)
+- MemGraph: 2TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
+- Bitcoin full node: 1TB+ SSD/nvme storage, 8+ CPU cores, 64GB+ RAM
+- Indexer: 4+ CPU, 2 GB RAM
 
 ## System Configuration
 
@@ -114,7 +109,7 @@
     ```
 
 - **Running Funds Flow Indexer**
-
+TODO: instead of docker containers, use RUN_SCRIPTS.SH
     Funds Flow Indexing is a slow process which can be accelerated by first generating pickle files for some of the blocks.
     For recent blocks, pickle files with at least 100000 size help with indexing speed.
     Below is an example procedure which does the following:
