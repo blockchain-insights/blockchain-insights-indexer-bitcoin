@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  bitcoin-core:
+    image: ruimarinho/bitcoin-core:latest
+    command:
+      -rpcuser=${RPC_USER}
+      -rpcpassword=${RPC_PASSWORD}
+      -rpcallowip=${RPC_ALLOW_IP:-172.16.0.0/12}
+      -rpcbind=${RPC_BIND:-0.0.0.0}
+      -maxconnections=${MAX_CONNECTIONS:-512}
+      -printtoconsole
+      -rpcworkqueue=4086
+      -server=1
+      -txindex=1
+    expose:
+      - "8332:8332"
+      - "8333:8333"
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+    restart: unless-stopped
+
+  block-parser:
+    image: ghcr.io/blockchain-insights/rusty_blockparser:latest
+    command: /bin/bash -c "ls -al /home/bitcoin/.bitcoin && rusty-blockparser --start $${BLOCK_PARSER_START_HEIGHT} --end $${BLOCK_PARSER_END_HEIGHT} --blockchain-dir /home/bitcoin/.bitcoin/blocks csvdump $${CSV_TARGET_PATH} && find $${CSV_TARGET_PATH} -type f ! -name 'tx_out*' -exec rm -f {} ';' && ls -al $${CSV_TARGET_PATH}"
+    environment:
+      - CSV_TARGET_PATH=${CSV_TARGET_PATH:-/data_csv}
+    volumes:
+      - bitcoin-data:/home/bitcoin/.bitcoin
+      - bitcoin-vout-csv:/data_csv
+    restart: no
+
+  bitcoin-vout-hashtable-builder:
+    image: ${IMAGE-blockchaininsights.azurecr.io/blockchain-data-subnet-bitcoin-indexer}:${VERSION_INDEXER-latest}
+    command: /bin/bash -c "ls -al /data_csv && ./scripts/run_indexer_bitcoin_vout_hashtable_builder.sh"
+    environment:
+      - NEW=${NEW:-True}
+      - PICKLE_INDEXING_THREADS=${PICKLE_INDEXING_THREADS:-64}
+    volumes:
+      - bitcoin-vout-csv:/data_csv
+      - bitcoin-vout-hashtable:/data_hashtable
+    restart: no
+
+  memgraph:
+    image: memgraph/memgraph-mage:1.18-memgraph-2.18
+    ports:
+      - "7687:7687"
+      - "7444:7444"
+    environment:
+      - MEMGRAPH_USER=${GRAPH_DB_USER}
+      - MEMGRAPH_PASSWORD=${GRAPH_DB_PASSWORD}
+    command: ["--storage-parallel-schema-recovery=true", "--storage-recovery-thread-count=60", "--storage-gc-cycle-sec=300", "--log-level=TRACE", "--also-log-to-stderr", "--storage-snapshot-on-exit=false", "--storage-snapshot-interval-sec=14400", "--storage-snapshot-retention-count=2", "--storage-wal-enabled=true", "--isolation-level=READ_COMMITTED", "--replication-restore-state-on-startup=true", "--query-execution-timeout-sec=0"]
+    volumes:
+      - bitcoin-memgraph-data:/var/lib/memgraph
+      - bitcoin-memgraph-log:/var/log/memgraph
+      - bitcoin-memgraph-etc:/etc/memgraph
+    restart: unless-stopped
+
+  memgraph-lab:
+    image: memgraph/lab:latest
+    container_name: memgraph-lab
+    ports:
+      - "3000:3000"
+    depends_on:
+      - memgraph
+    environment:
+      - QUICK_CONNECT_MG_HOST=memgraph
+      - QUICK_CONNECT_MG_PORT=7687
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    expose:
+      - "5432:5432"
+    volumes:
+      - postgres-data-miner:/var/lib/postgresql/data
+      - "./init.sql:/docker-entrypoint-initdb.d/init.sql"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-miner}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeit456$}
+
+    
+volumes:
+  bitcoin-vout-csv:
+    name: bitcoin-vout-csv
+  bitcoin-vout-hashtable:
+    name: bitcoin-vout-hashtable
+  bitcoin-data:
+    name: bitcoin-data
+  bitcoin-memgraph-data:
+    name: bitcoin-memgraph-data
+  bitcoin-memgraph-log:
+    name: bitcoin-memgraph-log
+  bitcoin-memgraph-etc:
+    name: bitcoin-memgraph-etc
+  postgres-data-miner:
+    name: "postgres-data-miner"
