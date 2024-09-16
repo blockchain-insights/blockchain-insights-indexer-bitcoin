@@ -20,27 +20,6 @@ services:
       - bitcoin-data:/home/bitcoin/.bitcoin
     restart: unless-stopped
 
-  block-parser:
-    image: ghcr.io/blockchain-insights/rusty_blockparser:latest
-    command: /bin/bash -c "ls -al /home/bitcoin/.bitcoin && rusty-blockparser --start $${BLOCK_PARSER_START_HEIGHT} --end $${BLOCK_PARSER_END_HEIGHT} --blockchain-dir /home/bitcoin/.bitcoin/blocks csvdump $${CSV_TARGET_PATH} && find $${CSV_TARGET_PATH} -type f ! -name 'tx_out*' -exec rm -f {} ';' && ls -al $${CSV_TARGET_PATH}"
-    environment:
-      - CSV_TARGET_PATH=${CSV_TARGET_PATH:-/data_csv}
-    volumes:
-      - bitcoin-data:/home/bitcoin/.bitcoin
-      - bitcoin-vout-csv:/data_csv
-    restart: no
-
-  bitcoin-vout-hashtable-builder:
-    image: ${IMAGE-blockchaininsights.azurecr.io/blockchain-data-subnet-bitcoin-indexer}:${VERSION_INDEXER-latest}
-    command: /bin/bash -c "ls -al /data_csv && ./scripts/run_indexer_bitcoin_vout_hashtable_builder.sh"
-    environment:
-      - NEW=${NEW:-True}
-      - PICKLE_INDEXING_THREADS=${PICKLE_INDEXING_THREADS:-64}
-    volumes:
-      - bitcoin-vout-csv:/data_csv
-      - bitcoin-vout-hashtable:/data_hashtable
-    restart: no
-
   memgraph:
     image: memgraph/memgraph-mage:1.18-memgraph-2.18
     ports:
@@ -81,10 +60,6 @@ services:
 
     
 volumes:
-  bitcoin-vout-csv:
-    name: bitcoin-vout-csv
-  bitcoin-vout-hashtable:
-    name: bitcoin-vout-hashtable
   bitcoin-data:
     name: bitcoin-data
   bitcoin-memgraph-data:
