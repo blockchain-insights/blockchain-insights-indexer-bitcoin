@@ -14,7 +14,7 @@ class BalanceChange(Base):
     
     __table_args__ = (
         PrimaryKeyConstraint('address', 'block'),
-        Index('idx_block_timestamp', 'block_timestamp')
+        Index('idx_block_timestamp', 'block_timestamp'),
     )
 
 
@@ -26,5 +26,5 @@ class Block(Base):
     
     __table_args__ = (
         PrimaryKeyConstraint('block_height'),
-        Index('idx_timestamp', 'timestamp')
+        Index('idx_timestamp', 'timestamp'),
     )

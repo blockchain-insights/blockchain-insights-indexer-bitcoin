@@ -81,6 +81,27 @@ class BalanceIndexer:
             except SQLAlchemyError as e:
                 logger.error(f"An error occurred: {e}")
 
+            # Check if the index 'balance_changes_block_idx' exists
+            index_check = conn.execute(text(
+                "SELECT * FROM pg_indexes WHERE indexname = 'balance_changes_block_idx';"
+            )).fetchone()
+
+            if index_check:
+                # Index exists, check if it is created on block field with DESC order
+                if 'DESC' in index_check[4]:  # The definition of the index is in the 6th column
+                    # Drop the existing index
+                    conn.execute(text("DROP INDEX IF EXISTS balance_changes_block_idx;"))
+                    logger.info("Dropped existing index 'balance_changes_block_idx'.")
+
+                    # Create a new index
+                    conn.execute(text("CREATE INDEX balance_changes_block_idx ON public.balance_changes USING btree (block);"))
+                    logger.info("Created index 'balance_changes_block_idx' on 'block' field.")
+
+            else:
+                # Create index if it doesn't exist
+                conn.execute(text("CREATE INDEX balance_changes_block_idx ON public.balance_changes USING btree (block);"))
+                logger.info("Created index 'balance_changes_block_idx' on 'block' field.")
+                
             # Create indexes if they do not exist
             conn.execute(text(
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_timestamp') THEN CREATE INDEX idx_timestamp ON blocks (timestamp); END IF; END $$;"))
