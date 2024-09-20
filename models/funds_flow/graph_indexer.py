@@ -56,20 +56,7 @@ class GraphIndexer:
                     edition = record["edition"]
                     return f"Memgraph {edition} {version}"
             except Exception:
-                pass  # Not Neo4j, continue to check for Memgraph
-
-            try:
-                # Try Memgraph-specific query
-                result = session.run("SHOW DATABASE INFO")
-                record = result.single()
-                print("record {}".format(record))
-                if record and "memgraph" in record["version"].lower():
-                    return f"Memgraph {record['version']}"
-            except Exception:
-                pass  # Not Memgraph either
-
-            # If we get here, we couldn't determine the database type
-            return "Unknown graph database"
+                return "Unknown graph database"
 
 
     def set_min_max_block_height_cache(self, min_block_height, max_block_height):
