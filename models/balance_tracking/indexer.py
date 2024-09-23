@@ -56,7 +56,7 @@ def index_block(_bitcoin_node, _balance_indexer, block_height):
     return success
 
 
-def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 1):
+def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 0):
     global shutdown_flag
 
     skip_blocks = 6
@@ -91,7 +91,8 @@ if __name__ == "__main__":
     logger.info("Starting indexer")
 
     logger.info("Getting latest block number...")
-    latest_block_height = balance_indexer.get_latest_block_number()
+    latest_indexed_block = balance_indexer.get_latest_block_number()
+    latest_block_height = latest_indexed_block - 1 if latest_indexed_block < 1 else latest_indexed_block
     logger.info(f"Latest block number", extra=logger_extra_data(latest_block_height = latest_block_height))
     
     move_forward(bitcoin_node, balance_indexer, latest_block_height + 1)
