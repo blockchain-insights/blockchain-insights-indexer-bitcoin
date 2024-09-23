@@ -38,6 +38,7 @@ class BalanceIndexer:
             Base.metadata.create_all(self.engine)
             logger.info("Created 3 tables: `balance_changes`, `blocks`")
 
+        indexes = inspector.get_indexes('balance_changes')
         target_index = next((idx for idx in indexes if idx['name'] == 'balance_changes_block_idx'), None)
 
         if target_index:
