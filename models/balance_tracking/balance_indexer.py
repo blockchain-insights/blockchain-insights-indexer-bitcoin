@@ -38,6 +38,31 @@ class BalanceIndexer:
             Base.metadata.create_all(self.engine)
             logger.info("Created 3 tables: `balance_changes`, `blocks`")
 
+        indexes = inspector.get_indexes('balance_changes')
+        target_index = next((idx for idx in indexes if idx['name'] == 'balance_changes_block_idx'), None)
+
+        if target_index:
+            is_desc = target_index.get('column_sorting', {}).get('block') == 'desc'
+
+            if is_desc:
+                print("Index 'balance_changes_block_idx' is currently in DESC order. Updating to ASC...")
+
+                connection.execute(text("DROP INDEX IF EXISTS balance_changes_block_idx"))
+
+                new_index = sa.Index('balance_changes_block_idx', BalanceChange.block)
+                create_idx_stmt = CreateIndex(new_index)
+                connection.execute(create_idx_stmt)
+
+                print("Index updated successfully.")
+            else:
+                print("Index 'balance_changes_block_idx' is already in ASC order. No changes needed.")
+        else:
+            print("Index 'balance_changes_block_idx' does not exist. Creating it in ASC order...")
+            new_index = sa.Index('balance_changes_block_idx', BalanceChange.block)
+            create_idx_stmt = CreateIndex(new_index)
+            connection.execute(create_idx_stmt)
+            print("Index created successfully.")
+
         # Close the connection
         connection.close()
 
