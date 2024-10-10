@@ -91,6 +91,26 @@
     ```
     docker compose up -d memgraph
     ```
+  
+- **Running Neo4j**
+
+    Use Neo4j for a less RAM intensive approach to Memgraph.
+
+    Open the ```.env``` file:
+    ```
+    nano .env
+    ```
+
+    Set the required variables in the ```.env``` file and save it:
+    ```ini
+    GRAPH_DB_USER=your_secret_user_name
+    GRAPH_DB_PASSWORD=your_secret_password
+    ```
+
+    Start the Memgraph
+    ```
+    docker compose up -d neo4j
+    ```
 
 - **Running Postgres with TimescaleDB extension**
 
