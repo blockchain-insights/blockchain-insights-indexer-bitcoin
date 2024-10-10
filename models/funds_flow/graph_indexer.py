@@ -55,7 +55,8 @@ class GraphIndexer:
                     version = record["versions"][0]
                     edition = record["edition"]
                     return f"Memgraph {edition} {version}"
-            except Exception:
+            except Exception as e:
+                print(f"exception: {e}")
                 return "Unknown graph database"
 
 
@@ -130,15 +131,25 @@ class GraphIndexer:
 
     def create_neo4j_indexes(self):
         with self.driver.session() as session:
-            # Fetch existing indexes
+            # Fetch existing indexes and constraints
             existing_indexes = session.run("SHOW INDEXES")
+            existing_constraints = session.run("SHOW CONSTRAINTS")
             existing_index_set = set()
+            existing_constraint_set = set()
+
             for record in existing_indexes:
                 label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
                 properties = record["properties"]
                 index_name = f"{label}-{properties[0]}" if properties else label
                 if index_name:
                     existing_index_set.add(index_name)
+
+            for record in existing_constraints:
+                label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
+                properties = record["properties"]
+                constraint_name = f"{label}-{properties[0]}" if properties else label
+                if constraint_name:
+                    existing_constraint_set.add(constraint_name)
 
             index_creation_statements = {
                 "Cache-cache_id": "CREATE INDEX FOR (n:Cache) ON (n.cache_id)",
@@ -149,8 +160,14 @@ class GraphIndexer:
                 "SENT-value_satoshi": "CREATE INDEX FOR ()-[r:SENT]-() ON (r.value_satoshi)"
             }
 
+            constraint_statements = {
+                "Transaction-tx_id": "CREATE CONSTRAINT IF NOT EXISTS FOR (t:Transaction) REQUIRE t.tx_id IS UNIQUE",
+                "Address-address": "CREATE CONSTRAINT IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE"
+            }
+
+            # Create indexes (if not exist and no corresponding constraint exists)
             for index_name, statement in index_creation_statements.items():
-                if index_name not in existing_index_set:
+                if index_name not in existing_index_set and index_name not in existing_constraint_set:
                     try:
                         logger.info("Creating index", extra=logger_extra_data(index_name=index_name))
                         session.run(statement)
@@ -166,6 +183,33 @@ class GraphIndexer:
                                 }
                             )
                         )
+
+            # Create constraints (if not exist, dropping existing index if necessary)
+            for constraint_name, statement in constraint_statements.items():
+                if constraint_name not in existing_constraint_set:
+                    try:
+                        # If an index exists, drop it first
+                        if constraint_name in existing_index_set:
+                            drop_index_statement = f"DROP INDEX ON :{constraint_name.split('-')[0]}({constraint_name.split('-')[1]})"
+                            logger.info("Dropping existing index before creating constraint",
+                                        extra=logger_extra_data(index_name=constraint_name))
+                            session.run(drop_index_statement)
+
+                        logger.info("Creating constraint", extra=logger_extra_data(constraint=statement))
+                        session.run(statement)
+                    except Exception as e:
+                        logger.error(
+                            "An exception occurred while creating constraint",
+                            extra=logger_extra_data(
+                                constraint=statement,
+                                error={
+                                    'exception_type': e.__class__.__name__,
+                                    'exception_message': str(e),
+                                    'exception_args': e.args
+                                }
+                            )
+                        )
+
             logger.info("Syncing block range caches...")
 
     from decimal import getcontext
@@ -195,6 +239,13 @@ class GraphIndexer:
                 "SENT-value_satoshi": "CREATE INDEX ON :SENT(value_satoshi)",
             }
 
+            # Add constraints (Note: Memgraph uses a different syntax for constraints)
+            constraint_statements = [
+                "CREATE CONSTRAINT ON (t:Transaction) ASSERT t.tx_id IS UNIQUE",
+                "CREATE CONSTRAINT ON (a:Address) ASSERT a.address IS UNIQUE"
+            ]
+
+            # Create indexes
             for index_name, statement in index_creation_statements.items():
                 if index_name not in existing_index_set:
                     try:
@@ -206,6 +257,18 @@ class GraphIndexer:
                                                              error={'exception_type': e.__class__.__name__,
                                                                     'exception_message': str(e),
                                                                     'exception_args': e.args}))
+
+            # Create constraints
+            for constraint in constraint_statements:
+                try:
+                    logger.info(f"Creating constraint", extra=logger_extra_data(constraint=constraint))
+                    session.run(constraint)
+                except Exception as e:
+                    logger.error(f"An exception occurred while creating constraint",
+                                 extra=logger_extra_data(constraint=constraint,
+                                                         error={'exception_type': e.__class__.__name__,
+                                                                'exception_message': str(e),
+                                                                'exception_args': e.args}))
 
     def create_indexes(self):
         db_type = self.check_database_type()
