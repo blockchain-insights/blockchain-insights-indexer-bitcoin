@@ -79,5 +79,9 @@ volumes:
     name: bitcoin-memgraph-log
   bitcoin-memgraph-etc:
     name: bitcoin-memgraph-etc
+  neo4j-data-miner:
+    name: neo4j-data-miner
+  neo4j-logs-miner:
+    name: neo4j-logs-miner
   postgres-data-miner:
     name: "postgres-data-miner"
