@@ -35,6 +35,17 @@ services:
       - bitcoin-memgraph-etc:/etc/memgraph
     restart: unless-stopped
 
+  neo4j:
+    image: neo4j:latest
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=${GRAPH_DB_USER}/${GRAPH_DB_PASSWORD}
+    volumes:
+      - neo4j-data-miner:/data
+      - neo4j-logs-miner:/logs
+
   memgraph-lab:
     image: memgraph/lab:latest
     container_name: memgraph-lab
@@ -68,5 +79,9 @@ volumes:
     name: bitcoin-memgraph-log
   bitcoin-memgraph-etc:
     name: bitcoin-memgraph-etc
+  neo4j-data-miner:
+    name: neo4j-data-miner
+  neo4j-logs-miner:
+    name: neo4j-logs-miner
   postgres-data-miner:
     name: "postgres-data-miner"

@@ -36,4 +36,3 @@ jobs:
           VERSION_TAG="$IMAGE_NAME:$VERSION"
           docker build --tag $VERSION_TAG .
           docker push $VERSION_TAG
-          

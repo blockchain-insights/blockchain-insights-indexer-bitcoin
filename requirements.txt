@@ -1,4 +1,3 @@
-bittensor
 pydantic
 python-bitcoinrpc
 python-dotenv

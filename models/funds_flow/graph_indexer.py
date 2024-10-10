@@ -38,6 +38,27 @@ class GraphIndexer:
     def close(self):
         self.driver.close()
 
+    def check_database_type(self):
+        with self.driver.session() as session:
+            try:
+                # Try Neo4j-specific query first
+                result = session.run("CALL dbms.components() YIELD name, versions, edition")
+                print("result {}".format(result))
+                record = result.single()
+                print("record {}".format(record))
+
+                if record and "Neo4j" in record["name"]:
+                    version = record["versions"][0]
+                    edition = record["edition"]
+                    return f"Neo4j {edition} {version}"
+                if record and "Memgraph" in record["name"]:
+                    version = record["versions"][0]
+                    edition = record["edition"]
+                    return f"Memgraph {edition} {version}"
+            except Exception:
+                return "Unknown graph database"
+
+
     def set_min_max_block_height_cache(self, min_block_height, max_block_height):
         with self.driver.session() as session:
             # update min block height
@@ -107,12 +128,52 @@ class GraphIndexer:
 
             return gap_ranges
 
+    def create_neo4j_indexes(self):
+        with self.driver.session() as session:
+            # Fetch existing indexes
+            existing_indexes = session.run("SHOW INDEXES")
+            existing_index_set = set()
+            for record in existing_indexes:
+                label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
+                properties = record["properties"]
+                index_name = f"{label}-{properties[0]}" if properties else label
+                if index_name:
+                    existing_index_set.add(index_name)
+
+            index_creation_statements = {
+                "Cache-cache_id": "CREATE INDEX FOR (n:Cache) ON (n.cache_id)",
+                "Transaction-tx_id": "CREATE INDEX FOR (n:Transaction) ON (n.tx_id)",
+                "Transaction-block_height": "CREATE INDEX FOR (n:Transaction) ON (n.block_height)",
+                "Transaction-out_total_amount": "CREATE INDEX FOR (n:Transaction) ON (n.out_total_amount)",
+                "Address-address": "CREATE INDEX FOR (n:Address) ON (n.address)",
+                "SENT-value_satoshi": "CREATE INDEX FOR ()-[r:SENT]-() ON (r.value_satoshi)"
+            }
+
+            for index_name, statement in index_creation_statements.items():
+                if index_name not in existing_index_set:
+                    try:
+                        logger.info("Creating index", extra=logger_extra_data(index_name=index_name))
+                        session.run(statement)
+                    except Exception as e:
+                        logger.error(
+                            "An exception occurred while creating index",
+                            extra=logger_extra_data(
+                                index_name=index_name,
+                                error={
+                                    'exception_type': e.__class__.__name__,
+                                    'exception_message': str(e),
+                                    'exception_args': e.args
+                                }
+                            )
+                        )
+            logger.info("Syncing block range caches...")
+
     from decimal import getcontext
 
     # Set the precision high enough to handle satoshis for Bitcoin transactions
     getcontext().prec = 28
 
-    def create_indexes(self):
+    def create_memgraph_indexes(self):
         with self.driver.session() as session:
             # Fetch existing indexes
             existing_indexes = session.run("SHOW INDEX INFO")
@@ -137,10 +198,24 @@ class GraphIndexer:
             for index_name, statement in index_creation_statements.items():
                 if index_name not in existing_index_set:
                     try:
-                        logger.info(f"Creating index", extra = logger_extra_data(index_name = index_name))
+                        logger.info(f"Creating index", extra=logger_extra_data(index_name=index_name))
                         session.run(statement)
                     except Exception as e:
-                        logger.error(f"An exception occurred while creating index", extra = logger_extra_data(index_name = index_name, error = {'exception_type': e.__class__.__name__,'exception_message': str(e),'exception_args': e.args}))
+                        logger.error(f"An exception occurred while creating index",
+                                     extra=logger_extra_data(index_name=index_name,
+                                                             error={'exception_type': e.__class__.__name__,
+                                                                    'exception_message': str(e),
+                                                                    'exception_args': e.args}))
+
+    def create_indexes(self):
+        db_type = self.check_database_type()
+        print("db_type", db_type)
+        if "Neo4j" in db_type:
+            self.create_neo4j_indexes()
+        elif "Memgraph" in db_type:
+            self.create_memgraph_indexes()
+        else:
+            raise ValueError(f"Unsupported database type: {db_type}")
 
     def create_graph_focused_on_money_flow(self, block_data, _bitcoin_node, batch_size=8):
         transactions = block_data.transactions
