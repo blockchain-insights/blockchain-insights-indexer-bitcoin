@@ -39,26 +39,26 @@ class BalanceIndexer:
             logger.info("Created 3 tables: `balance_changes`, `blocks`")
 
         indexes = inspector.get_indexes('balance_changes')
-        target_index = next((idx for idx in indexes if idx['name'] == 'balance_changes_block_height_idx'), None)
+        target_index = next((idx for idx in indexes if idx['name'] == 'idx_balance_changes_block_height'), None)
 
         if target_index:
             is_desc = target_index.get('column_sorting', {}).get('block') == 'desc'
 
             if is_desc:
-                print("Index 'balance_changes_block_height_idx' is currently in DESC order. Updating to ASC...")
+                print("Index 'idx_balance_changes_block_height' is currently in DESC order. Updating to ASC...")
 
-                connection.execute(text("DROP INDEX IF EXISTS balance_changes_block_height_idx"))
+                connection.execute(text("DROP INDEX IF EXISTS idx_balance_changes_block_height"))
 
-                new_index = sa.Index('balance_changes_block_height_idx', BalanceChange.block_height)
+                new_index = sa.Index('idx_balance_changes_block_height', BalanceChange.block_height)
                 create_idx_stmt = CreateIndex(new_index)
                 connection.execute(create_idx_stmt)
 
                 print("Index updated successfully.")
             else:
-                print("Index 'balance_changes_block_height_idx' is already in ASC order. No changes needed.")
+                print("Index 'idx_balance_changes_block_height' is already in ASC order. No changes needed.")
         else:
-            print("Index 'balance_changes_block_height_idx' does not exist. Creating it in ASC order...")
-            new_index = sa.Index('balance_changes_block_height_idx', BalanceChange.block_height)
+            print("Index 'idx_balance_changes_block_height' does not exist. Creating it in ASC order...")
+            new_index = sa.Index('idx_balance_changes_block_height', BalanceChange.block_height)
             create_idx_stmt = CreateIndex(new_index)
             connection.execute(create_idx_stmt)
             print("Index created successfully.")
@@ -106,26 +106,26 @@ class BalanceIndexer:
             except SQLAlchemyError as e:
                 logger.error(f"An error occurred: {e}")
 
-            # Check if the index 'balance_changes_block_height_idx' exists
+            # Check if the index 'idx_balance_changes_block_height' exists
             index_check = conn.execute(text(
-                "SELECT * FROM pg_indexes WHERE indexname = 'balance_changes_block_height_idx';"
+                "SELECT * FROM pg_indexes WHERE indexname = 'idx_balance_changes_block_height';"
             )).fetchone()
 
             if index_check:
                 # Index exists, check if it is created on block field with DESC order
                 if 'DESC' in index_check[4]:  # The definition of the index is in the 6th column
                     # Drop the existing index
-                    conn.execute(text("DROP INDEX IF EXISTS balance_changes_block_height_idx;"))
-                    logger.info("Dropped existing index 'balance_changes_block_height_idx'.")
+                    conn.execute(text("DROP INDEX IF EXISTS idx_balance_changes_block_height;"))
+                    logger.info("Dropped existing index 'idx_balance_changes_block_height_idx'.")
 
                     # Create a new index
-                    conn.execute(text("CREATE INDEX balance_changes_block_height_idx ON public.balance_changes USING btree (block);"))
-                    logger.info("Created index 'balance_changes_block_height_idx' on 'block' field.")
+                    conn.execute(text("CREATE INDEX idx_balance_changes_block_height ON public.balance_changes USING btree (block);"))
+                    logger.info("Created index 'idx_balance_changes_block_height' on 'block' field.")
 
             else:
                 # Create index if it doesn't exist
-                conn.execute(text("CREATE INDEX balance_changes_block_height_idx ON public.balance_changes USING btree (block);"))
-                logger.info("Created index 'balance_changes_block_height_idx' on 'block' field.")
+                conn.execute(text("CREATE INDEX idx_balance_changes_block_height ON public.balance_changes USING btree (block);"))
+                logger.info("Created index 'idx_balance_changes_block_height' on 'block' field.")
                 
             # Create indexes if they do not exist
             conn.execute(text(
