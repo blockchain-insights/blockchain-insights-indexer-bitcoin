@@ -21,6 +21,9 @@ class BalanceChange(Base):
         Index('idx_balance_changes_block_height', 'block_height')
     )
 
+    def __repr__(self):
+        return f"<BalanceChange(address='{self.address}', block={self.block_height}, delta={self.balance_delta})>"
+
 
 class Block(Base):
     __tablename__   = 'blocks'
