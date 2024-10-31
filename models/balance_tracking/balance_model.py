@@ -7,15 +7,18 @@ Base = declarative_base()
 class BalanceChange(Base):
     __tablename__   = 'balance_changes'
 
-    address     = Column(String, primary_key=True)
-    block       = Column(Integer, primary_key=True)
-    d_balance   = Column(BigInteger)
+    address         = Column(String, primary_key=True)
+    block_height    = Column(Integer, primary_key=True)
+    event           = Column(String)
+    balance_delta   = Column(BigInteger)
     block_timestamp = Column(TIMESTAMP)
     
     __table_args__ = (
-        PrimaryKeyConstraint('address', 'block'),
-        Index('idx_block_timestamp', 'block_timestamp'),
-        Index('balance_changes_block_idx', block)
+        PrimaryKeyConstraint('address', 'block_height'),
+        Index('idx_balance_addr', 'balance_delta', 'address'),
+        Index('idx_timestamp_balance_addr', 'block_timestamp', 'balance_delta', 'address'),
+        Index('idx_block_balance_addr', 'block_height', 'balance_delta', 'address'),
+        Index('balance_changes_block_height_idx', 'block_height')
     )
 
 
