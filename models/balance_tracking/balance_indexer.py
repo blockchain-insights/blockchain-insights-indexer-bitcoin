@@ -130,8 +130,7 @@ class BalanceIndexer:
             # Create indexes if they do not exist
             conn.execute(text(
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_timestamp') THEN CREATE INDEX idx_timestamp ON blocks (timestamp); END IF; END $$;"))
-            conn.execute(text(
-                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_block_timestamp') THEN CREATE INDEX idx_block_timestamp ON balance_changes (block_timestamp); END IF; END $$;"))
+
 
     def get_latest_block_number(self):
         with self.Session() as session:
