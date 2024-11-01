@@ -87,7 +87,6 @@ if __name__ == "__main__":
 
     bitcoin_node = BitcoinNode()
     balance_indexer = BalanceIndexer()
-    balance_indexer.setup_db()
     logger.info("Starting indexer")
 
     logger.info("Getting latest block number...")

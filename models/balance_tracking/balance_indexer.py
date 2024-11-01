@@ -1,150 +1,102 @@
 import os
 from datetime import datetime
+from typing import Optional
 
-from setup_logger import setup_logger
-from setup_logger import logger_extra_data
-
+from setup_logger import setup_logger, logger_extra_data
+import sqlalchemy as sa
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.sql import select
-
-from .balance_model import Base, BalanceChange, Block
+from .balance_model import BalanceChange, Block, BalanceAddressBlock
 
 logger = setup_logger("BalanceIndexer")
 
 
 class BalanceIndexer:
-    def __init__(self, db_url: str = None):
+    def __init__(self, db_url: Optional[str] = None):
         if db_url is None:
-            self.db_url = os.environ.get("DB_CONNECTION_STRING",
-                                         f"postgresql://postgres:changeit456$@localhost:5432/miner")
+            self.db_url = os.environ.get(
+                "DB_CONNECTION_STRING",
+                "postgresql://postgres:changeit456$@localhost:5432/miner"
+            )
         else:
             self.db_url = db_url
 
         self.engine = create_engine(self.db_url)
         self.Session = sessionmaker(bind=self.engine)
 
-        # check if table exists and create if not
-        connection = self.engine.connect()
+        # Verify database setup
+        self._verify_database_setup()
 
-        # Create an inspector
-        inspector = inspect(self.engine)
+    def _verify_database_setup(self):
+        """Verify that the database is properly initialized."""
+        with self.engine.connect() as conn:
+            try:
+                # Check TimescaleDB extension
+                result = conn.execute(text(
+                    "SELECT 1 FROM pg_extension WHERE extname = 'timescaledb';"
+                )).fetchone()
+                if not result:
+                    logger.error("TimescaleDB extension not found. Please run init.sql first.")
+                    raise RuntimeError("TimescaleDB extension not found")
 
-        # Check if the table already exists
-        if (not inspector.has_table('balance_changes')) or (not inspector.has_table('blocks')):
-            # Create the table in the database
-            Base.metadata.create_all(self.engine)
-            logger.info("Created 3 tables: `balance_changes`, `blocks`")
+                # Check hypertables
+                for table in ['balance_changes', 'balance_address_blocks']:
+                    result = conn.execute(text(
+                        f"SELECT 1 FROM timescaledb_information.hypertables "
+                        f"WHERE hypertable_name = '{table}';"
+                    )).fetchone()
+                    if not result:
+                        logger.error(f"Hypertable {table} not found. Please run init.sql first.")
+                        raise RuntimeError(f"Hypertable {table} not found")
 
-        indexes = inspector.get_indexes('balance_changes')
-        target_index = next((idx for idx in indexes if idx['name'] == 'idx_balance_changes_block_height'), None)
+                # Verify required indexes exist
+                inspector = inspect(self.engine)
 
-        if target_index:
-            is_desc = target_index.get('column_sorting', {}).get('block') == 'desc'
+                # Check balance_changes indexes
+                bc_indexes = {idx['name'] for idx in inspector.get_indexes('balance_changes')}
+                required_bc_indexes = {
+                    'idx_balance_changes_block_height',
+                    'idx_balance_changes_addr_time'
+                }
 
-            if is_desc:
-                print("Index 'idx_balance_changes_block_height' is currently in DESC order. Updating to ASC...")
+                # Check balance_address_blocks indexes
+                bab_indexes = {idx['name'] for idx in inspector.get_indexes('balance_address_blocks')}
+                required_bab_indexes = {
+                    'idx_bab_addr_height_lookup',
+                    'idx_bab_height_balance_top',
+                    'idx_bab_height_balance_range',
+                    'idx_bab_timestamp_balance',
+                    'idx_bab_addr_time'
+                }
 
-                connection.execute(text("DROP INDEX IF EXISTS idx_balance_changes_block_height"))
+                missing_indexes = (required_bc_indexes - bc_indexes) | (required_bab_indexes - bab_indexes)
+                if missing_indexes:
+                    logger.warning(f"Missing indexes: {missing_indexes}. Please run init.sql.")
 
-                new_index = sa.Index('idx_balance_changes_block_height', BalanceChange.block_height)
-                create_idx_stmt = CreateIndex(new_index)
-                connection.execute(create_idx_stmt)
+                # Verify block_height_now function exists
+                result = conn.execute(text(
+                    "SELECT 1 FROM pg_proc WHERE proname = 'block_height_now';"
+                )).fetchone()
+                if not result:
+                    logger.error("block_height_now function not found. Please run init.sql first.")
+                    raise RuntimeError("block_height_now function not found")
 
-                print("Index updated successfully.")
-            else:
-                print("Index 'idx_balance_changes_block_height' is already in ASC order. No changes needed.")
-        else:
-            print("Index 'idx_balance_changes_block_height' does not exist. Creating it in ASC order...")
-            new_index = sa.Index('idx_balance_changes_block_height', BalanceChange.block_height)
-            create_idx_stmt = CreateIndex(new_index)
-            connection.execute(create_idx_stmt)
-            print("Index created successfully.")
-
-        # Close the connection
-        connection.close()
+            except SQLAlchemyError as e:
+                logger.error(f"Database verification failed: {str(e)}")
+                raise
 
     def close(self):
         self.engine.dispose()
 
-    def _ensure_hypertable_exists(self):
-        with self.engine.connect() as conn:
-            result = conn.execute(text(
-                "SELECT 1 FROM timescaledb_information.hypertables WHERE hypertable_name = 'balance_changes';"
-            )).fetchone()
-            if not result:
-                conn.execute(text(
-                    "SELECT create_hypertable('balance_changes', 'block', chunk_time_interval => 12960, migrate_data => true);"
-                ))
-
-    def setup_db(self):
-        with self.engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            try:
-                # Check if TimescaleDB extension is already installed
-                result = conn.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'timescaledb';"))
-                if not result.fetchone():
-                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS timescaledb CASCADE;"))
-                    logger.info("TimescaleDB extension created successfully.")
-                else:
-                    logger.info("TimescaleDB extension already exists.")
-
-                # Check if hypertable is enabled
-                result = conn.execute(text(
-                    "SELECT * FROM timescaledb_information.hypertables WHERE hypertable_name = 'balance_changes';"
-                )).fetchone()
-
-                if not result:
-                    conn.execute(text(
-                        "SELECT create_hypertable('balance_changes', 'block', chunk_time_interval => 12960, migrate_data => true);"
-                    ))
-                    logger.info("Hypertable 'balance_changes' created successfully.")
-                else:
-                    logger.info("Hypertable 'balance_changes' already exists.")
-            except SQLAlchemyError as e:
-                logger.error(f"An error occurred: {e}")
-
-            # Check if the index 'idx_balance_changes_block_height' exists
-            index_check = conn.execute(text(
-                "SELECT * FROM pg_indexes WHERE indexname = 'idx_balance_changes_block_height';"
-            )).fetchone()
-
-            if index_check:
-                # Index exists, check if it is created on block field with DESC order
-                if 'DESC' in index_check[4]:  # The definition of the index is in the 6th column
-                    # Drop the existing index
-                    conn.execute(text("DROP INDEX IF EXISTS idx_balance_changes_block_height;"))
-                    logger.info("Dropped existing index 'idx_balance_changes_block_height_idx'.")
-
-                    # Create a new index
-                    conn.execute(text("CREATE INDEX idx_balance_changes_block_height ON public.balance_changes USING btree (block);"))
-                    logger.info("Created index 'idx_balance_changes_block_height' on 'block' field.")
-
-            else:
-                # Create index if it doesn't exist
-                conn.execute(text("CREATE INDEX idx_balance_changes_block_height ON public.balance_changes USING btree (block);"))
-                logger.info("Created index 'idx_balance_changes_block_height' on 'block' field.")
-                
-            # Create indexes if they do not exist
-            conn.execute(text(
-                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'idx_timestamp') THEN CREATE INDEX idx_timestamp ON blocks (timestamp); END IF; END $$;"))
-
-
     def get_latest_block_number(self):
         with self.Session() as session:
             try:
-                latest_balance_change = session.query(BalanceChange).order_by(BalanceChange.block_height.desc()).first()
-                latest_block = latest_balance_change.block_height
-            except Exception as e:
-                latest_block = 0
-            return latest_block
-
-    from decimal import getcontext
-
-    # Set the precision high enough to handle satoshis for Bitcoin transactions
-    getcontext().prec = 28
+                latest_block = session.query(sa.func.max(BalanceChange.block_height)).scalar()
+                return latest_block or 0
+            except SQLAlchemyError as e:
+                logger.error(f"Error getting latest block: {e}")
+                return 0
 
     def create_rows_focused_on_balance_changes(self, block_data, _bitcoin_node):
         block_height = block_data.block_height
@@ -155,8 +107,9 @@ class BalanceIndexer:
         changed_addresses = {}
 
         for tx in transactions:
-            in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, _ = _bitcoin_node.process_in_memory_txn_for_indexing(
-                tx)
+            in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, _ = (
+                _bitcoin_node.process_in_memory_txn_for_indexing(tx)
+            )
 
             event_type = 'coinbase' if tx.is_coinbase else 'transfer'
 
@@ -174,27 +127,50 @@ class BalanceIndexer:
 
         logger.info(f"Adding row(s)...", extra=logger_extra_data(add_rows=len(changed_addresses)))
 
-        new_rows = [BalanceChange(address=address, balance_delta=balance_changes_by_address[address], block_height=block_height,
-                                  block_timestamp=block_timestamp, event=changed_addresses[address]) for address in changed_addresses]
-
         with self.Session() as session:
             try:
-                # Add the new rows to the balance_changes table
-                session.add_all(new_rows)
+                # Create balance changes rows
+                balance_changes = [
+                    BalanceChange(
+                        address=address,
+                        balance_delta=balance_changes_by_address[address],
+                        block_height=block_height,
+                        block_timestamp=block_timestamp,
+                        event=changed_addresses[address]
+                    )
+                    for address in changed_addresses
+                ]
 
-                # Add new row to blocks table
-                session.add(Block(block_height=block_height, timestamp=block_timestamp))
+                # Add block record
+                block = Block(
+                    block_height=block_height,
+                    timestamp=block_timestamp
+                )
 
-                # Commit the session to save the changes to the database
+                session.add_all(balance_changes)
+                session.add(block)
                 session.commit()
-
                 return True
 
             except SQLAlchemyError as e:
-                # Rollback the session in case of an error
                 session.rollback()
-                logger.error(f"An exception occurred", extra=logger_extra_data(
-                    error={'exception_type': e.__class__.__name__, 'exception_message': str(e),
-                           'exception_args': e.args}))
-
+                logger.error(
+                    "An exception occurred",
+                    extra=logger_extra_data(
+                        error={
+                            'exception_type': e.__class__.__name__,
+                            'exception_message': str(e),
+                            'exception_args': e.args
+                        }
+                    )
+                )
                 return False
+
+    def compress_chunks(self):
+        """Trigger manual compression of old chunks."""
+        with self.engine.connect() as conn:
+            try:
+                conn.execute(text("SELECT compress_old_chunks()"))
+                logger.info("Successfully compressed old chunks")
+            except SQLAlchemyError as e:
+                logger.error(f"Error compressing chunks: {e}")
