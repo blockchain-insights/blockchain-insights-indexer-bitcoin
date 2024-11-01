@@ -78,27 +78,9 @@ class BitcoinNode(Node):
             rpc_connection._AuthServiceProxy__conn.close()  # Close the connection
 
     def get_address_and_amount_by_txn_id_and_vout_id(self, txn_id: str, vout_id: str):
-        # Check if the data is in the hash table
-        if (txn_id, vout_id) in self.tx_out_hash_table[txn_id[:3]]:
-            address, amount = self.tx_out_hash_table[txn_id[:3]][(txn_id, vout_id)]
-            return address, int(amount)
-
-        rpc_connection = AuthServiceProxy(self.node_rpc_url)
-        try:
-            txn_data = rpc_connection.getrawtransaction(str(txn_id), 1)
-            vout = next((x for x in txn_data['vout'] if str(x['n']) == vout_id), None)
-
-            if vout is None:
-                return f"unknown-{txn_id}", 0
-
-            amount = int(vout['value'] * 100000000)
-            address = derive_address(vout["scriptPubKey"], vout["scriptPubKey"].get("asm", ""))
-
-            return address, amount
-        except Exception as e:
-            return f"unknown-{txn_id}", 0
-        finally:
-            rpc_connection._AuthServiceProxy__conn.close()
+        """Single transaction output lookup, now using the batch method internally"""
+        result = self.get_addresses_and_amounts_by_txouts([(txn_id, vout_id)])
+        return result.get((txn_id, vout_id), (f"unknown-{txn_id}", 0))
 
     def get_txn_data_by_id(self, txn_id: str):
         try:
@@ -201,3 +183,103 @@ class BitcoinNode(Node):
         out_total_amount = sum(output_amounts.values())
 
         return input_amounts, output_amounts, input_addresses, output_addresses, in_total_amount, out_total_amount
+
+    def get_blocks_by_height_range(self, start_height: int, end_height: int):
+        """Batch fetch blocks in a range"""
+        rpc_connection = AuthServiceProxy(self.node_rpc_url)
+        try:
+            # Block hash batch
+            commands = [[
+                "getblockhash",
+                height
+            ] for height in range(start_height, end_height + 1)]
+
+            block_hashes = rpc_connection.batch_(commands)
+
+            # Block batch
+            commands = [[
+                "getblock",
+                block_hash,
+                2
+            ] for block_hash in block_hashes]
+
+            return rpc_connection.batch_(commands)
+        except Exception as e:
+            logger.error(f"RPC provider with error",
+                         error={
+                             'exception_type': e.__class__.__name__,
+                             'exception_message': str(e),
+                             'exception_args': e.args
+                         })
+            return []
+        finally:
+            rpc_connection._AuthServiceProxy__conn.close()
+
+    def get_transactions_by_ids(self, tx_ids: list):
+        """Batch fetch txs by id"""
+        rpc_connection = AuthServiceProxy(self.node_rpc_url)
+        try:
+            commands = [[
+                "getrawtransaction",
+                tx_id,
+                1
+            ] for tx_id in tx_ids]
+
+            return rpc_connection.batch_(commands)
+        except Exception as e:
+            logger.error(f"RPC provider with error",
+                         error = {
+                             'exception_type': e.__class__.__name__,
+                             'exception_message': str(e),
+                             'exception_args': e.args
+                         })
+            return []
+        finally:
+            rpc_connection._AuthServiceProxy__conn.close()
+
+    def get_addresses_and_amounts_by_txouts(self, txouts: list):
+        """
+        Batch fetch addresses and amounts for multiple txouts
+        txouts should be a list of (txn_id, vout_id) tuples
+        :param txouts:
+        :return:
+        """
+
+        # First check hash table for all entries
+        results = {}
+        missing_txouts = []
+
+        for txn_id, vout_id in txouts:
+            if (txn_id, vout_id) in self.tx_out_hash_table[txn_id[:3]]:
+                address, amount = self.tx_out_hash_table[txn_id[:3]][(txn_id, vout_id)]
+                results[(txn_id, vout_id)] = (address, int(amount))
+            else:
+                missing_txouts.append((txn_id, vout_id))
+
+                # If we have missing entries, fetch them in batch
+        if missing_txouts:
+            unique_tx_ids = list(set(tx_id for tx_id, _ in missing_txouts))
+            tx_data_list = self.get_transactions_by_ids(unique_tx_ids)
+
+            # Create a mapping of txid to transaction data
+            tx_map = {tx['txid']: tx for tx in tx_data_list if tx}
+
+            for txn_id, vout_id in missing_txouts:
+                if txn_id in tx_map:
+                    tx_data = tx_map[txn_id]
+                    vout = next((x for x in tx_data['vout'] if str(x['n']) == str(vout_id)), None)
+
+                    if vout:
+                        amount = int(vout['value'] * 100000000)
+                        address = derive_address(vout["scriptPubKey"],
+                                                 vout["scriptPubKey"].get("asm", ""))
+                    else:
+                        address = f"unknown-{txn_id}"
+                        amount = 0
+                else:
+                    address = f"unknown-{txn_id}"
+                    amount = 0
+
+                results[(txn_id, vout_id)] = (address, amount)
+
+        return results
