@@ -364,14 +364,21 @@ class BalanceIndexer:
         """Process multiple blocks of balance changes in a single transaction"""
         with self.Session() as session:
             try:
+                # Use a dictionary keyed by (address, block_height) to prevent duplicates
+                changes_by_address_block = {}
+                blocks = {}
+
                 # Process each block
                 for block_data in block_data_list:
                     block_height = block_data.block_height
                     block_timestamp = datetime.utcfromtimestamp(block_data.timestamp)
                     transactions = block_data.transactions
 
-                    balance_changes_by_address = {}
-                    changed_addresses = {}
+                    # Store block record
+                    blocks[block_height] = Block(
+                        block_height=block_height,
+                        timestamp=block_timestamp
+                    )
 
                     for tx in transactions:
                         in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, _ = (
@@ -380,39 +387,43 @@ class BalanceIndexer:
 
                         event_type = 'coinbase' if tx.is_coinbase else 'transfer'
 
+                        # Process inputs
                         for address in input_addresses:
-                            if address not in balance_changes_by_address:
-                                balance_changes_by_address[address] = 0
-                                changed_addresses[address] = event_type
-                            balance_changes_by_address[address] -= in_amount_by_address[address]
+                            key = (address, block_height)
+                            if key not in changes_by_address_block:
+                                changes_by_address_block[key] = {
+                                    'delta': 0,
+                                    'event': event_type,
+                                    'timestamp': block_timestamp
+                                }
+                            changes_by_address_block[key]['delta'] -= in_amount_by_address[address]
 
+                            # Process outputs
                         for address in output_addresses:
-                            if address not in balance_changes_by_address:
-                                balance_changes_by_address[address] = 0
-                                changed_addresses[address] = event_type
-                            balance_changes_by_address[address] += out_amount_by_address[address]
+                            key = (address, block_height)
+                            if key not in changes_by_address_block:
+                                changes_by_address_block[key] = {
+                                    'delta': 0,
+                                    'event': event_type,
+                                    'timestamp': block_timestamp
+                                }
+                            changes_by_address_block[key]['delta'] += out_amount_by_address[address]
 
-                    # Create balance changes rows
-                    balance_changes = [
-                        BalanceChange(
-                            address=address,
-                            balance_delta=balance_changes_by_address[address],
-                            block_height=block_height,
-                            block_timestamp=block_timestamp,
-                            event=changed_addresses[address]
-                        )
-                        for address in changed_addresses
-                    ]
-
-                    # Add block record
-                    block = Block(
+                            # Create balance changes rows
+                balance_changes = [
+                    BalanceChange(
+                        address=address,
+                        balance_delta=change_data['delta'],
                         block_height=block_height,
-                        timestamp=block_timestamp
+                        block_timestamp=change_data['timestamp'],
+                        event=change_data['event']
                     )
+                    for (address, block_height), change_data in changes_by_address_block.items()
+                ]
 
-                    session.add_all(balance_changes)
-                    session.add(block)
-
+                # Add all records
+                session.add_all(balance_changes)
+                session.add_all(blocks.values())
                 session.commit()
                 return True
 
