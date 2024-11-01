@@ -18,8 +18,11 @@ class BalanceChange(Base):
         Index('idx_balance_addr', 'balance_delta', 'address'),
         Index('idx_timestamp_balance_addr', 'block_timestamp', 'balance_delta', 'address'),
         Index('idx_block_balance_addr', 'block_height', 'balance_delta', 'address'),
-        Index('balance_changes_block_height_idx', 'block_height')
+        Index('idx_balance_changes_block_height', 'block_height')
     )
+
+    def __repr__(self):
+        return f"<BalanceChange(address='{self.address}', block={self.block_height}, delta={self.balance_delta})>"
 
 
 class Block(Base):
