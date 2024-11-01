@@ -361,58 +361,39 @@ class BalanceIndexer:
                 return False
 
     def create_rows_focused_on_balance_changes_batch(self, block_data_list, _bitcoin_node):
-        """Process block batch in single tx"""
+        """Process multiple blocks of balance changes in a single transaction"""
         with self.Session() as session:
             try:
-                # Collect all txouts that need to be looked up across all blocks
-                txouts_to_lookup = []
-                for block_data in block_data_list:
-                    for tx in block_data.transactions:
-                        if not tx.is_coinbase:
-                            for vin in tx.vins:
-                                txouts_to_lookup.append((vin.tx_id, str(vin.vout_id)))
-
-                                # Batch lookup all needed txouts
-                input_txouts = _bitcoin_node.get_addresses_and_amounts_by_txouts(txouts_to_lookup)
-
-                all_balance_changes = []
-                all_blocks = []
-
                 # Process each block
                 for block_data in block_data_list:
                     block_height = block_data.block_height
                     block_timestamp = datetime.utcfromtimestamp(block_data.timestamp)
+                    transactions = block_data.transactions
 
                     balance_changes_by_address = {}
                     changed_addresses = {}
 
-                    # Process each transaction
-                    for tx in block_data.transactions:
+                    for tx in transactions:
+                        in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, _ = (
+                            _bitcoin_node.process_in_memory_txn_for_indexing(tx)
+                        )
+
                         event_type = 'coinbase' if tx.is_coinbase else 'transfer'
 
-                        # Process inputs (except for coinbase)
-                        if not tx.is_coinbase:
-                            for vin in tx.vins:
-                                address, amount = input_txouts.get(
-                                    (vin.tx_id, str(vin.vout_id)),
-                                    (f"unknown-{vin.tx_id}", 0)
-                                )
-
-                                if address not in balance_changes_by_address:
-                                    balance_changes_by_address[address] = 0
-                                    changed_addresses[address] = event_type
-                                balance_changes_by_address[address] -= amount
-
-                                # Process outputs
-                        for vout in tx.vouts:
-                            address = vout.address
+                        for address in input_addresses:
                             if address not in balance_changes_by_address:
                                 balance_changes_by_address[address] = 0
                                 changed_addresses[address] = event_type
-                            balance_changes_by_address[address] += vout.value_satoshi
+                            balance_changes_by_address[address] -= in_amount_by_address[address]
 
-                            # Create balance changes for this block
-                    block_changes = [
+                        for address in output_addresses:
+                            if address not in balance_changes_by_address:
+                                balance_changes_by_address[address] = 0
+                                changed_addresses[address] = event_type
+                            balance_changes_by_address[address] += out_amount_by_address[address]
+
+                    # Create balance changes rows
+                    balance_changes = [
                         BalanceChange(
                             address=address,
                             balance_delta=balance_changes_by_address[address],
@@ -423,20 +404,16 @@ class BalanceIndexer:
                         for address in changed_addresses
                     ]
 
-                    # Create block record
+                    # Add block record
                     block = Block(
                         block_height=block_height,
                         timestamp=block_timestamp
                     )
 
-                    all_balance_changes.extend(block_changes)
-                    all_blocks.append(block)
+                    session.add_all(balance_changes)
+                    session.add(block)
 
-                    # Add all records in a single transaction
-                session.add_all(all_balance_changes)
-                session.add_all(all_blocks)
                 session.commit()
-
                 return True
 
             except SQLAlchemyError as e:
