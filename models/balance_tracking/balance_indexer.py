@@ -25,6 +25,7 @@ class BalanceIndexer:
         self.engine = create_engine(self.db_url)
         self.Session = sessionmaker(bind=self.engine)
 
+        self.setup_db()
         # Verify database setup
         self._verify_database_setup()
 
@@ -160,16 +161,7 @@ class BalanceIndexer:
                     conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {definition};"))
                 logger.info("Created indexes")
 
-                # Enable compression
-                for table in ['balance_changes', 'balance_address_blocks']:
-                    conn.execute(text(f"""
-                        ALTER TABLE {table} SET (
-                            timescaledb.compress,
-                            timescaledb.compress_segmentby = 'address',
-                            timescaledb.compress_orderby = 'block_height DESC'
-                        );
-                    """))
-                logger.info("Enabled compression")
+
 
                 # Create monitoring view and function
                 conn.execute(text("""
@@ -198,19 +190,6 @@ class BalanceIndexer:
                         RETURNS void AS $$
                     BEGIN
                         REFRESH MATERIALIZED VIEW CONCURRENTLY balance_tables_stats;
-                    END;
-                    $$ LANGUAGE plpgsql;
-
-                    CREATE OR REPLACE FUNCTION compress_old_chunks()
-                    RETURNS void AS $$
-                    BEGIN
-                        PERFORM compress_chunk(chunk)
-                        FROM show_chunks('balance_changes') AS chunk
-                        WHERE chunk_relation_size(chunk) > 0;
-
-                        PERFORM compress_chunk(chunk)
-                        FROM show_chunks('balance_address_blocks') AS chunk
-                        WHERE chunk_relation_size(chunk) > 0;
                     END;
                     $$ LANGUAGE plpgsql;
                 """))
@@ -440,12 +419,3 @@ class BalanceIndexer:
                     )
                 )
                 return False
-
-    def compress_chunks(self):
-        """Trigger manual compression of old chunks."""
-        with self.engine.connect() as conn:
-            try:
-                conn.execute(text("SELECT compress_old_chunks()"))
-                logger.info("Successfully compressed old chunks")
-            except SQLAlchemyError as e:
-                logger.error(f"Error compressing chunks: {e}")
