@@ -25,6 +25,7 @@ class BalanceIndexer:
         self.engine = create_engine(self.db_url)
         self.Session = sessionmaker(bind=self.engine)
 
+        self.setup_db()
         # Verify database setup
         self._verify_database_setup()
 
