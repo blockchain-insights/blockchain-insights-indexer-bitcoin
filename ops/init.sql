@@ -124,18 +124,6 @@ CREATE INDEX IF NOT EXISTS idx_bab_addr_time
 CREATE INDEX IF NOT EXISTS idx_blocks_timestamp
     ON blocks (timestamp);
 
--- Enable compression
-ALTER TABLE balance_changes SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'address',
-    timescaledb.compress_orderby = 'block_height DESC'
-);
-
-ALTER TABLE balance_address_blocks SET (
-    timescaledb.compress,
-    timescaledb.compress_segmentby = 'address',
-    timescaledb.compress_orderby = 'block_height DESC'
-);
 
 -- Create monitoring view
 CREATE MATERIALIZED VIEW IF NOT EXISTS balance_tables_stats AS
@@ -162,21 +150,5 @@ CREATE OR REPLACE FUNCTION refresh_balance_stats()
     RETURNS void AS $$
 BEGIN
     REFRESH MATERIALIZED VIEW CONCURRENTLY balance_tables_stats;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create a manual compression function instead of using policies
-CREATE OR REPLACE FUNCTION compress_old_chunks()
-RETURNS void AS $$
-BEGIN
-    -- Compress chunks from balance_changes
-    PERFORM compress_chunk(chunk)
-    FROM show_chunks('balance_changes') AS chunk
-    WHERE chunk_relation_size(chunk) > 0;  -- Only compress non-empty chunks
-
-    -- Compress chunks from balance_address_blocks
-    PERFORM compress_chunk(chunk)
-    FROM show_chunks('balance_address_blocks') AS chunk
-    WHERE chunk_relation_size(chunk) > 0;  -- Only compress non-empty chunks
 END;
 $$ LANGUAGE plpgsql;
