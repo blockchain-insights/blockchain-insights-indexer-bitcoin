@@ -86,7 +86,7 @@ class GraphIndexer:
         with self.driver.session() as session:
             result = session.run(
                 """
-                MATCH (t: Transaction{block_height: $block_height})
+                MATCH ()-[t:TRANSACTION {block_height: $block_height}]->()
                 RETURN t
                 LIMIT 1;
                 """,
@@ -99,7 +99,7 @@ class GraphIndexer:
         with self.driver.session() as session:
             result = session.run(
                 """
-                MATCH (t:Transaction)
+                MATCH ()-[t:TRANSACTION]->()
                 RETURN DISTINCT t.block_height AS block_height
                 ORDER BY block_height
                 """,
@@ -134,22 +134,29 @@ class GraphIndexer:
             # Fetch existing indexes and constraints
             existing_indexes = session.run("SHOW INDEXES")
             existing_constraints = session.run("SHOW CONSTRAINTS")
-            existing_index_set = set()
-            existing_constraint_set = set()
 
+            # Store both index details and names
+            index_details = {}
+            constraint_details = set()
+
+            # Process existing indexes
             for record in existing_indexes:
-                label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
-                properties = record["properties"]
-                index_name = f"{label}-{properties[0]}" if properties else label
+                # Get the index name directly from the record
+                index_name = record.get("name")
                 if index_name:
-                    existing_index_set.add(index_name)
+                    label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
+                    properties = record["properties"]
+                    property_key = f"{label}-{properties[0]}" if properties else label
+                    if property_key:
+                        index_details[property_key] = index_name
 
+            # Process existing constraints
             for record in existing_constraints:
                 label = record["labelsOrTypes"][0] if record["labelsOrTypes"] else None
                 properties = record["properties"]
                 constraint_name = f"{label}-{properties[0]}" if properties else label
                 if constraint_name:
-                    existing_constraint_set.add(constraint_name)
+                    constraint_details.add(constraint_name)
 
             index_creation_statements = {
                 "Cache-cache_id": "CREATE INDEX FOR (n:Cache) ON (n.cache_id)",
@@ -165,37 +172,19 @@ class GraphIndexer:
                 "Address-address": "CREATE CONSTRAINT IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE"
             }
 
-            # Create indexes (if not exist and no corresponding constraint exists)
-            for index_name, statement in index_creation_statements.items():
-                if index_name not in existing_index_set and index_name not in existing_constraint_set:
+            # First, handle constraints and their potential conflicting indexes
+            for constraint_key, statement in constraint_statements.items():
+                if constraint_key not in constraint_details:
                     try:
-                        logger.info("Creating index", extra=logger_extra_data(index_name=index_name))
-                        session.run(statement)
-                    except Exception as e:
-                        logger.error(
-                            "An exception occurred while creating index",
-                            extra=logger_extra_data(
-                                index_name=index_name,
-                                error={
-                                    'exception_type': e.__class__.__name__,
-                                    'exception_message': str(e),
-                                    'exception_args': e.args
-                                }
-                            )
-                        )
-
-            # Create constraints (if not exist, dropping existing index if necessary)
-            for constraint_name, statement in constraint_statements.items():
-                if constraint_name not in existing_constraint_set:
-                    try:
-                        # If an index exists, drop it first
-                        if constraint_name in existing_index_set:
-                            drop_index_statement = f"DROP INDEX ON :{constraint_name.split('-')[0]}({constraint_name.split('-')[1]})"
+                        # If an index exists for this property, drop it by name first
+                        if constraint_key in index_details:
+                            index_name = index_details[constraint_key]
                             logger.info("Dropping existing index before creating constraint",
-                                        extra=logger_extra_data(index_name=constraint_name))
-                            session.run(drop_index_statement)
+                                        extra=logger_extra_data(index_name=index_name))
+                            session.run(f"DROP INDEX {index_name}")
 
-                        logger.info("Creating constraint", extra=logger_extra_data(constraint=statement))
+                        logger.info("Creating constraint",
+                                    extra=logger_extra_data(constraint=statement))
                         session.run(statement)
                     except Exception as e:
                         logger.error(
@@ -210,7 +199,28 @@ class GraphIndexer:
                             )
                         )
 
-            logger.info("Syncing block range caches...")
+            # Then create remaining indexes that don't conflict with constraints
+            for index_key, statement in index_creation_statements.items():
+                if (index_key not in index_details and
+                        index_key not in constraint_details):
+                    try:
+                        logger.info("Creating index",
+                                    extra=logger_extra_data(index_name=index_key))
+                        session.run(statement)
+                    except Exception as e:
+                        logger.error(
+                            "An exception occurred while creating index",
+                            extra=logger_extra_data(
+                                index_name=index_key,
+                                error={
+                                    'exception_type': e.__class__.__name__,
+                                    'exception_message': str(e),
+                                    'exception_args': e.args
+                                }
+                            )
+                        )
+
+            logger.info("Index and constraint creation completed")
 
     from decimal import getcontext
 
@@ -280,7 +290,20 @@ class GraphIndexer:
         else:
             raise ValueError(f"Unsupported database type: {db_type}")
 
+    def get_last_indexed_block_height(self):
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (n:Cache {field: 'max_block_height'})
+                RETURN n.value as last_block_height
+                """
+            )
+            record = result.single()
+
+            return record["last_block_height"] if record and record["last_block_height"] is not None else -1
+
     def create_graph_focused_on_money_flow(self, block_data, _bitcoin_node, batch_size=8):
+        current_height = int(block_data.block_height)
         transactions = block_data.transactions
 
         with self.driver.session() as session:
@@ -289,69 +312,74 @@ class GraphIndexer:
 
             try:
                 for i in range(0, len(transactions), batch_size):
-                    batch_transactions = transactions[i : i + batch_size]
+                    batch_transactions = transactions[i: i + batch_size]
 
-                    # Process all transactions, inputs, and outputs in the current batch
-                    batch_txns = []
-                    batch_inputs = []
-                    batch_outputs = []
+                    batch_flows = []
                     for tx in batch_transactions:
-                        in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = _bitcoin_node.process_in_memory_txn_for_indexing(tx)
-                        
-                        inputs = [{"address": address, "amount": in_amount_by_address[address], "tx_id": tx.tx_id } for address in input_addresses]
-                        outputs = [{"address": address, "amount": out_amount_by_address[address], "tx_id": tx.tx_id } for address in output_addresses]
+                        in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = _bitcoin_node.process_in_memory_txn_for_indexing(
+                            tx)
 
-                        batch_txns.append({
-                            "tx_id": tx.tx_id,
-                            "in_total_amount": in_total_amount,
-                            "out_total_amount": out_total_amount,
-                            "timestamp": tx.timestamp,
-                            "block_height": tx.block_height,
-                            "is_coinbase": tx.is_coinbase,
-                        })
-                        batch_inputs += inputs
-                        batch_outputs += outputs
+                        for input_addr in input_addresses:
+                            input_amount = in_amount_by_address[input_addr]
+                            input_ratio = input_amount / in_total_amount if in_total_amount > 0 else 0
+
+                            for output_addr in output_addresses:
+                                output_amount = out_amount_by_address[output_addr]
+                                flow_amount = input_ratio * output_amount
+
+                                if flow_amount > 0:
+                                    batch_flows.append({
+                                        "from_address": input_addr,
+                                        "to_address": output_addr,
+                                        "amount": flow_amount,
+                                        "block_height": current_height
+                                    })
+
+                    for tx in batch_transactions:
+                        if tx.is_coinbase:
+                            _, out_amount_by_address, _, output_addresses, _, _ = _bitcoin_node.process_in_memory_txn_for_indexing(
+                                tx)
+                            for output_addr in output_addresses:
+                                batch_flows.append({
+                                    "from_address": "coinbase",
+                                    "to_address": output_addr,
+                                    "amount": out_amount_by_address[output_addr],
+                                    "block_height": current_height
+                                })
+
 
                     transaction.run(
                         """
-                        UNWIND $transactions AS tx
-                        MERGE (t:Transaction {tx_id: tx.tx_id})
-                        ON CREATE SET t.timestamp = tx.timestamp,
-                                    t.in_total_amount = tx.in_total_amount,
-                                    t.out_total_amount = tx.out_total_amount,
-                                    t.timestamp = tx.timestamp,
-                                    t.block_height = tx.block_height,
-                                    t.is_coinbase = tx.is_coinbase
+                        UNWIND $flows AS flow
+                        MERGE (from:Address {address: flow.from_address})
+                        MERGE (to:Address {address: flow.to_address})
+                        CREATE (from)-[t:TRANSACTION {
+                            amount: flow.amount,
+                            block_height: flow.block_height
+                        }]->(to)
                         """,
-                        transactions=batch_txns,
+                        flows=batch_flows
                     )
-                    
-                    transaction.run(
-                        """
-                        UNWIND $inputs AS input
-                        MERGE (a:Address {address: input.address})
-                        MERGE (t:Transaction {tx_id: input.tx_id})
-                        CREATE (a)-[:SENT { value_satoshi: input.amount }]->(t)
-                        """,
-                        inputs=batch_inputs
-                    )
-                    
-                    transaction.run(
-                        """
-                        UNWIND $outputs AS output
-                        MERGE (a:Address {address: output.address})
-                        MERGE (t:Transaction {tx_id: output.tx_id})
-                        CREATE (t)-[:SENT { value_satoshi: output.amount }]->(a)
-                        """,
-                        outputs=batch_outputs
-                    )
+
 
                 transaction.commit()
+                logger.info("Successfully indexed block",
+                            extra=logger_extra_data(
+                                block_height=current_height
+                            ))
                 return True
 
             except Exception as e:
                 transaction.rollback()
-                logger.error(f"An exception occurred", extra = logger_extra_data(error = {'exception_type': e.__class__.__name__,'exception_message': str(e),'exception_args': e.args}))
+                logger.error("An exception occurred",
+                             extra=logger_extra_data(
+                                 error={
+                                     'exception_type': e.__class__.__name__,
+                                     'exception_message': str(e),
+                                     'exception_args': e.args
+                                 },
+                                 block_height=current_height
+                             ))
                 return False
 
             finally:
