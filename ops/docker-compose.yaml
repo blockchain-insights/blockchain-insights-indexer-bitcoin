@@ -60,6 +60,19 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeit456$}
 
+  redpanda-postgres:
+    image: postgres:16-alpine
+    expose:
+      - "5420:5432"
+    ports:
+      - "5420:5432"
+    volumes:
+      - postgres-data-indexer:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${REDPANDA_POSTGRES_DB:-redpanda}
+      - POSTGRES_USER=${REDPANDA_POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${REDPANDA_POSTGRES_PASSWORD:-changeit456$}
+
   redpanda:
     command:
       - redpanda
@@ -86,7 +99,7 @@ services:
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
     container_name: redpanda-0
     volumes:
-      - redpanda-data:/var/lib/redpanda/data
+      - redpanda-data-indexer:/var/lib/redpanda/data
     ports:
       - 18081:18081
       - 18082:18082
@@ -127,5 +140,7 @@ volumes:
     name: bitcoin-memgraph-etc
   postgres-data-miner:
     name: "postgres-data-miner"
-  redpanda-data:
-    name: "redpanda-data"
+  postgres-data-indexer:
+    name: "postgres-data-indexer"
+  redpanda-data-indexer:
+    name: "redpanda-data-indexer"

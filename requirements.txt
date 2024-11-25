@@ -1,5 +1,5 @@
 pydantic
-python-bitcoinrpc @ git+https://github.com/nnboskovic/python-bitcoinrpc@30bdbebc7ac4a2669aa14a820d7a36d2c3544189
+python-bitcoinrpc
 python-dotenv
 neo4j
 bitcoin
@@ -10,3 +10,5 @@ loguru
 psycopg2-binary
 pymgclient
 sqlalchemy
+confluent_kafka
+loguru
