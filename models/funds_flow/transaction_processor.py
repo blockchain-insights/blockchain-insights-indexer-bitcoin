@@ -1,17 +1,16 @@
 import os
+import traceback
+from loguru import logger
 from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-from setup_logger import setup_logger
 from confluent_kafka import Producer
 import json
-from setup_logger import logger_extra_data
 
-logger = setup_logger("GraphIndexer")
 Base = declarative_base()
 
 
-class TransactionProcessorState(Base):
-    __tablename__ = 'transaction_processor_state'
+class BlockStreamState(Base):
+    __tablename__ = 'block_stream_state'
     block_height = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -19,7 +18,7 @@ class TransactionProcessorState(Base):
     )
 
 
-class TransactionProcessorManager:
+class BlockStreamStateManager:
     def __init__(self, db_url: str = None):
         if db_url is None:
             self.db_url = os.environ.get("DB_CONNECTION_STRING",
@@ -55,19 +54,17 @@ class TransactionProcessorManager:
             return block_height is not None
 
 
-class TransactionProcessor:
+class BlockStreamProducer:
     def __init__(self, kafka_config, bitcoin_node):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
 
-    def publish_transaction(self, block_data, batch_size=8):
+    def process(self, block_data, batch_size=8):
         transactions = block_data.transactions
         idx = 0
         try:
             for i in range(0, len(transactions), batch_size):
                 batch_transactions = transactions[i: i + batch_size]
-
-                # Process all transactions, inputs, and outputs in the current batch
                 organized_transactions = []
                 for tx in batch_transactions:
                     in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
@@ -88,20 +85,18 @@ class TransactionProcessor:
                     })
                     idx = idx + 1
 
-                self._send_to_stream("bitcoin-transactions", organized_transactions)
+                self._send_to_stream("bitcoin-block-transactions-stream", organized_transactions)
 
             return True
 
         except Exception as e:
-            logger.error(f"An exception occurred", extra=logger_extra_data(
-                error={'exception_type': e.__class__.__name__, 'exception_message': str(e), 'exception_args': e.args}))
+            logger.error(f"An exception occurred",  error=e, trb=traceback.format_exc())
             return False
 
     def _send_to_stream(self, topic, transactions):
-        """Helper function to send transactions to a Redpanda stream."""
         try:
             for transaction in transactions:
                 self.producer.produce(topic, key=transaction["tx_id"], value=json.dumps(transaction))
             self.producer.flush()
         except Exception as e:
-            logger.error(f"Failed to produce transaction: {e}", extra={"transactions": transactions})
+            logger.error(f"An exception occurred",  error=e, trb=traceback.format_exc())

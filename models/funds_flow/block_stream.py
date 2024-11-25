@@ -1,21 +1,25 @@
-import datetime
 import os
 import sys
 import signal
 import threading
 import time
 from loguru import logger
-from models.funds_flow.transaction_processor import TransactionProcessor, TransactionProcessorManager
+from models.funds_flow.transaction_processor import BlockStreamStateManager, BlockStreamProducer
 from node.node import BitcoinNode
 from node.node_utils import parse_block_data
 
 
-class BitcoinTransactionIndexer:
+class BlockStream:
 
-    def __init__(self, bitcoin_node, transaction_processor, transaction_processor_manager, terminate_event: threading.Event):
+    def __init__(self,
+                 bitcoin_node,
+                 block_stream_producer,
+                 block_stream_state_manager,
+                 terminate_event: threading.Event):
+
         self.bitcoin_node = bitcoin_node
-        self.transaction_processor = transaction_processor
-        self.transaction_processor_manager = transaction_processor_manager
+        self.block_stream_producer = block_stream_producer
+        self.block_stream_state_manager = block_stream_state_manager
         self.terminate_event = terminate_event
 
     def index_block(self, block_height):
@@ -24,7 +28,7 @@ class BitcoinTransactionIndexer:
         start_time = time.time()
         block_data = parse_block_data(block)
 
-        success = self.transaction_processor.publish_transaction(block_data)
+        success = self.block_stream_producer.process(block_data)
 
         end_time = time.time()
         time_taken = end_time - start_time
@@ -35,9 +39,9 @@ class BitcoinTransactionIndexer:
         )
 
         if time_taken > 0:
-            logger.info("Processing transactions", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions, time_taken=formatted_time_taken, tps=formatted_tps)
+            logger.info("Streaming transactions", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions, time_taken=formatted_time_taken, tps=formatted_tps)
         else:
-            logger.info("Processed transactions in 0.00 seconds (  Inf TPS).", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions)
+            logger.info("Streamed transactions in 0.00 seconds (  Inf TPS).", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions)
 
         return success
 
@@ -57,14 +61,14 @@ class BitcoinTransactionIndexer:
                 time.sleep(10)
                 continue
 
-            while transaction_processor_manager.check_if_block_height_is_indexed(block_height):
+            while self.block_stream_state_manager.check_if_block_height_is_indexed(block_height):
                 logger.info(f"Skipping block. Already indexed.", block_height=block_height)
                 block_height += 1
 
             success = self.index_block(block_height)
 
             if success:
-                transaction_processor_manager.add_block_height(block_height)
+                self.block_stream_state_manager.add_block_height(block_height)
                 forward_block_height = block_height + 1
             else:
                 logger.error(f"Failed to index block.", block_height=block_height)
@@ -72,6 +76,8 @@ class BitcoinTransactionIndexer:
 
 
 terminate_event = threading.Event()
+
+
 def shutdown_handler(signum, frame):
     logger.info(
         "Shutdown signal received. Waiting for current indexing to complete before shutting down."
@@ -84,12 +90,12 @@ if __name__ == "__main__":
     load_dotenv()
 
     def patch_record(record):
-        record["extra"]["service"] = 'bitcoin-transaction-indexer'
+        record["extra"]["service"] = 'bitcoin-block-streamer'
         return True
 
     logger.remove()
     logger.add(
-        "../logs/bitcoin-transaction-indexer.log",
+        "../../logs/bbitcoin-block-streamer.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",
@@ -109,19 +115,18 @@ if __name__ == "__main__":
     db_url = os.getenv("REDPANDA_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/redpanda")
 
     bitcoin_node = BitcoinNode()
-    transaction_processor_manager = TransactionProcessorManager(db_url)
+    block_stream_state_manager = BlockStreamStateManager(db_url)
     kafka_config = {
         'bootstrap.servers': 'localhost:19092',  # Replace with your Redpanda/Kafka broker
-        'group.id': 'bitcoin-transaction-consumer',
+        'group.id': 'bitcoin-block-transactions-stream',
         'enable.idempotence': True,
         'auto.offset.reset': 'earliest'
     }
-    transaction_processor = TransactionProcessor(kafka_config, bitcoin_node)
-    logger.info("Starting indexer")
+    block_stream_producer = BlockStreamProducer(kafka_config, bitcoin_node)
+    logger.info("Starting block stream")
 
-    bitcoin_transaction_indexer = BitcoinTransactionIndexer(bitcoin_node, transaction_processor, transaction_processor_manager, terminate_event)
+    block_stream_producer = BlockStream(bitcoin_node, block_stream_producer, block_stream_state_manager, terminate_event)
+    start_height = block_stream_state_manager.get_last_block_height() + 1
+    block_stream_producer.run(start_height)
 
-    start_height = transaction_processor_manager.get_last_block_height() + 1
-    bitcoin_transaction_indexer.run(start_height)
-
-    logger.info("Indexer stopped")
+    logger.info("Block stream stopped.")
