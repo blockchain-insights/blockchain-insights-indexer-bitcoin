@@ -62,6 +62,7 @@ services:
       - QUICK_CONNECT_MG_HOST=memgraph
       - QUICK_CONNECT_MG_PORT=7687
 
+
   postgres:
     image: timescale/timescaledb:latest-pg16
     expose:

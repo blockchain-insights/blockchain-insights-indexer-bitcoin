@@ -1,7 +1,9 @@
 # Bitcoin Indexer
 
 ## Hardware Requirements
-- MemGraph: 2TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
+- MemGraph (IN_MEMORY_TRANSACTIONAL): 2TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
+- MemGraph (ON_DISK_TRANSACTIONAL): 1TB+ RAM, 16+ CPU cores, ~7TB+ SSD/nvme storage
+- Redpanda: 0.256TB+ RAM, 8+ CPU cores, ~7TB+ SSD/nvme storage
 - Bitcoin full node: 1TB+ SSD/nvme storage, 8+ CPU cores, 64GB+ RAM
 - Indexer: 4+ CPU, 2 GB RAM
 
@@ -91,26 +93,6 @@
     ```
     docker compose up -d memgraph
     ```
-  
-- **Running Neo4j**
-
-    Use Neo4j for a less RAM intensive approach to Memgraph.
-
-    Open the ```.env``` file:
-    ```
-    nano .env
-    ```
-
-    Set the required variables in the ```.env``` file and save it:
-    ```ini
-    GRAPH_DB_USER=your_secret_user_name
-    GRAPH_DB_PASSWORD=your_secret_password
-    ```
-
-    Start the Memgraph
-    ```
-    docker compose up -d neo4j
-    ```
 
 - **Running Postgres with TimescaleDB extension**
 
@@ -135,9 +117,9 @@
     docker compose up -d postgres
     ```
 
-- **Running Funds Flow Indexer**
+- **Running Money Flow Indexer**
 
-    Funds Flow Indexing is a slow process which can be accelerated by first generating pickle files for some of the blocks.
+    Money Flow Indexing is a slow process which can be accelerated by first generating pickle files for some of the blocks.
     For recent blocks, pickle files with at least 100000 size help with indexing speed.
     Below is an example procedure which does the following:
      - Generate pickle files for the recent blocks
@@ -216,7 +198,7 @@
 
 - **Running Balance Tracking Indexer**
 
-    Balance Tracking Indexer also takes long and requires loading pickle files like Funds Flow Indexer.
+    Balance Tracking Indexer also takes long and requires loading pickle files like Money Flow Indexer.
 
     Start the balance tracking indexer:
 

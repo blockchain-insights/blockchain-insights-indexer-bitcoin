@@ -1,6 +1,6 @@
 import unittest
 import os
-from models.funds_flow.graph_indexer import GraphIndexer
+from models.money_flow.graph_indexer import GraphIndexer
 
 
 class TestGraphIndexer(unittest.TestCase):

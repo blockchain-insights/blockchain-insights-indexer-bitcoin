@@ -6,8 +6,8 @@ from node.node import BitcoinNode
 from setup_logger import setup_logger
 from setup_logger import logger_extra_data
 from node.node_utils import parse_block_data
-from models.funds_flow.graph_indexer import GraphIndexer
-from models.funds_flow.graph_search import GraphSearch
+from models.money_flow.graph_indexer import GraphIndexer
+from models.money_flow.graph_search import GraphSearch
 
 # Global flag to signal shutdown
 shutdown_flag = False
