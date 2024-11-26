@@ -7,6 +7,7 @@ import json
 import traceback
 
 from confluent_kafka.admin import AdminClient
+from confluent_kafka import admin
 from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from confluent_kafka import Producer
@@ -87,30 +88,25 @@ class BlockStreamProducer:
         try:
             metadata = self.admin_client.list_topics(timeout=10)
             if self.topic_name not in metadata.topics:
-                fs = self.admin_client.create_topics([
-                    {
-                        'topic': self.topic_name,
-                        'num_partitions': 3,
-                        'replication_factor': 1,
-                        'config': {
-                            'retention.ms': '-1',  # Never expire messages
-                            'retention.bytes': '-1'  # No size limit
-                        }
-                    }
-                ])
+                new_topic = admin.NewTopic(self.topic_name,
+                                           num_partitions=self.num_partitions,
+                                           replication_factor=1,
+                                           config={'retention.ms': '-1', 'retention.bytes': '-1'})
+
+                fs = self.admin_client.create_topics([new_topic])
 
                 for topic, future in fs.items():
                     try:
                         future.result()
                         logger.info(f"Created topic {topic} with infinite retention")
                     except Exception as e:
-                        logger.error(f"Failed to create topic {topic}: {e}")
+                        logger.error(f"Failed to create topic {topic}", error=e)
                         raise
             else:
                 logger.info(f"Topic {self.topic_name} already exists")
 
         except Exception as e:
-            logger.error(f"Error managing topic: {e}")
+            logger.error(f"Error managing topic", error=e, trb=traceback.format_exc())
             raise
 
     def process(self, block_data, batch_size=8):
@@ -139,7 +135,7 @@ class BlockStreamProducer:
                     })
                     idx = idx + 1
 
-                self._send_to_stream("bitcoin-block-transactions-stream", organized_transactions)
+                self._send_to_stream(self.topic_name, organized_transactions)
 
             return True
 
@@ -153,7 +149,10 @@ class BlockStreamProducer:
 
                 partition = self.partitioner(transaction["block_height"])
 
-                self.producer.produce(topic, key=transaction["tx_id"], value=json.dumps(transaction))
+                self.producer.produce(topic,
+                                      key=transaction["tx_id"],
+                                      value=json.dumps(transaction),
+                                      partition=partition)
             self.producer.flush()
         except Exception as e:
             logger.error(f"An exception occurred",  error=e, trb=traceback.format_exc())
@@ -263,11 +262,12 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     db_url = os.getenv("REDPANDA_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/redpanda")
+    redpanda_bootstrap_servers = os.getenv("REDPANDA_BOOTSTRAP_SERVERS", "localhost:19092")
 
     bitcoin_node = BitcoinNode()
     block_stream_state_manager = BlockStreamStateManager(db_url)
     kafka_config = {
-        'bootstrap.servers': 'localhost:19092',  # Replace with your Redpanda/Kafka broker
+        'bootstrap.servers': redpanda_bootstrap_servers,  # Replace with your Redpanda/Kafka broker
         'group.id': 'bitcoin-block-transactions-stream',
         'enable.idempotence': True,
         'auto.offset.reset': 'earliest'

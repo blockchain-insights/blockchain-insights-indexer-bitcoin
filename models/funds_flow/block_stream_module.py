@@ -27,6 +27,9 @@
 import mgp
 import json
 
+START_BLOCK_HEIGHT = 0
+
+
 @mgp.transformation
 def consume(messages: mgp.Messages) -> mgp.Record(query=str, parameters=mgp.Nullable[mgp.Map]):
     result_queries = []
@@ -35,6 +38,9 @@ def consume(messages: mgp.Messages) -> mgp.Record(query=str, parameters=mgp.Null
         message = messages.message_at(i)
         payload_as_str = message.payload().decode("utf-8")
         tx = json.loads(payload_as_str)
+
+        if tx["block_height"] < START_BLOCK_HEIGHT:
+            continue
 
         # Create Transaction node
         result_queries.append(mgp.Record(
