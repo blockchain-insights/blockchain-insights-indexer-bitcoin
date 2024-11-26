@@ -5,10 +5,10 @@ neo4j
 bitcoin
 base58
 pycryptodome
-blockchain-data-subnet-shared-libs==0.0.12
 loguru
 psycopg2-binary
 pymgclient
 sqlalchemy
 confluent_kafka
 loguru
+mgp
