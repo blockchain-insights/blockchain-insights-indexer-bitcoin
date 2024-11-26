@@ -5,6 +5,8 @@ import threading
 import time
 import json
 import traceback
+
+from confluent_kafka.admin import AdminClient
 from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from confluent_kafka import Producer
@@ -60,10 +62,56 @@ class BlockStreamStateManager:
             return block_height is not None
 
 
+class BlockHeightPartitioner:
+    def __init__(self, num_partitions, range_size=1000):
+        self.num_partitions = num_partitions
+        self.range_size = range_size
+
+    def __call__(self, block_height):
+        partition = (block_height // self.range_size) % self.num_partitions
+        return int(partition)
+
 class BlockStreamProducer:
     def __init__(self, kafka_config, bitcoin_node):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
+
+        self.topic_name = "bitcoin-block-transactions-stream"
+        self.num_partitions = 64
+        self.partitioner = BlockHeightPartitioner(self.num_partitions)
+
+        self.admin_client = AdminClient(kafka_config)
+        self.ensure_topic_exists()
+
+    def ensure_topic_exists(self):
+        try:
+            metadata = self.admin_client.list_topics(timeout=10)
+            if self.topic_name not in metadata.topics:
+                fs = self.admin_client.create_topics([
+                    {
+                        'topic': self.topic_name,
+                        'num_partitions': 3,
+                        'replication_factor': 1,
+                        'config': {
+                            'retention.ms': '-1',  # Never expire messages
+                            'retention.bytes': '-1'  # No size limit
+                        }
+                    }
+                ])
+
+                for topic, future in fs.items():
+                    try:
+                        future.result()
+                        logger.info(f"Created topic {topic} with infinite retention")
+                    except Exception as e:
+                        logger.error(f"Failed to create topic {topic}: {e}")
+                        raise
+            else:
+                logger.info(f"Topic {self.topic_name} already exists")
+
+        except Exception as e:
+            logger.error(f"Error managing topic: {e}")
+            raise
 
     def process(self, block_data, batch_size=8):
         transactions = block_data.transactions
@@ -102,6 +150,9 @@ class BlockStreamProducer:
     def _send_to_stream(self, topic, transactions):
         try:
             for transaction in transactions:
+
+                partition = self.partitioner(transaction["block_height"])
+
                 self.producer.produce(topic, key=transaction["tx_id"], value=json.dumps(transaction))
             self.producer.flush()
         except Exception as e:
