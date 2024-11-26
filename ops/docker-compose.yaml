@@ -35,6 +35,22 @@ services:
       - bitcoin-memgraph-etc:/etc/memgraph
     restart: unless-stopped
 
+  memgraph-archive:
+    image: memgraph/memgraph-mage:1.21-memgraph-2.21
+    ports:
+      - "7688:7687"
+      - "7445:7444"
+    environment:
+      - MEMGRAPH_USER=${GRAPH_DB_USER}
+      - MEMGRAPH_PASSWORD=${GRAPH_DB_PASSWORD}
+    command: ["--storage-mode=ON_DISK_TRANSACTIONAL", "--storage-parallel-schema-recovery=true", "--storage-properties-on-edges=true", "--storage-recovery-thread-count=60",  "--log-level=TRACE", "--also-log-to-stderr",  "--query-execution-timeout-sec=0" ]
+    volumes:
+      - bitcoin-memgraph-archive-data:/var/lib/memgraph
+      - bitcoin-memgraph-archive-log:/var/log/memgraph
+      - bitcoin-memgraph-archive-etc:/etc/memgraph
+    restart: unless-stopped
+
+
   memgraph-lab:
     image: memgraph/lab:latest
     container_name: memgraph-lab
@@ -138,6 +154,12 @@ volumes:
     name: bitcoin-memgraph-log
   bitcoin-memgraph-etc:
     name: bitcoin-memgraph-etc
+  bitcoin-memgraph-archive-data:
+    name: bitcoin-memgraph-archive-data
+  bitcoin-memgraph-archive-log:
+    name: bitcoin-memgraph-archive-log
+  bitcoin-memgraph-archive-etc:
+    name: bitcoin-memgraph-archive-etc
   postgres-data-miner:
     name: "postgres-data-miner"
   postgres-data-indexer:
