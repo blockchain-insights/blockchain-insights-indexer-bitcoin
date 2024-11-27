@@ -21,7 +21,8 @@ services:
     restart: unless-stopped
 
   memgraph:
-    image: memgraph/memgraph-mage:1.21-memgraph-2.21
+    container_name: memgraph
+    image: memgraph/memgraph-mage:1.22-memgraph-2.22
     ports:
       - "7687:7687"
       - "7444:7444"
@@ -36,10 +37,11 @@ services:
     restart: unless-stopped
 
   memgraph-archive:
-    image: memgraph/memgraph-mage:1.21-memgraph-2.21
+    container_name: memgraph-archive
+    image: memgraph/memgraph-mage:1.22-memgraph-2.22
     ports:
-      - "7688:7687"
-      - "7445:7444"
+      - "7687:7687"
+      - "7444:7444"
     environment:
       - MEMGRAPH_USER=${GRAPH_DB_USER}
       - MEMGRAPH_PASSWORD=${GRAPH_DB_PASSWORD}
@@ -61,7 +63,6 @@ services:
     environment:
       - QUICK_CONNECT_MG_HOST=memgraph
       - QUICK_CONNECT_MG_PORT=7687
-
 
   postgres:
     image: timescale/timescaledb:latest-pg16

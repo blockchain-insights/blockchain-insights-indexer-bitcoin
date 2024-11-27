@@ -3,3 +3,8 @@ how to setup rendpanda, how to configure topic OR topic should be preconfigured 
 - write manual how to configure memgraph stream, upload module, and start streaming
 - add time log into memgraph module
 - create indexes cypher query, add that into manual, no auto creation now
+
+
+
+?? how to user memgraph module stream to manipulate offset??
+?? hpow
