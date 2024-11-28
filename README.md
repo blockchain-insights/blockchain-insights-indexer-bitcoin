@@ -25,32 +25,8 @@
     ```bash
     cp .env.example .env
     ```
-- Configure Max Map Count:
-    ```bash
-    # For 1TB RAM
-    echo "vm.max_map_count=8388608" | sudo tee -a /etc/sysctl.conf
-    
-    # For 1.5TB RAM
-    echo "vm.max_map_count=12582912" | sudo tee -a /etc/sysctl.conf
-    
-    # For 2TB RAM
-    echo "vm.max_map_count=16777216" | sudo tee -a /etc/sysctl.conf
-    
-    # For 2.5TB RAM
-    echo "vm.max_map_count=20971520" | sudo tee -a /etc/sysctl.conf
-    
-    # For 3TB RAM
-    echo "vm.max_map_count=25165824" | sudo tee -a /etc/sysctl.conf
-    
-    # For 3.5TB RAM
-    echo "vm.max_map_count=29360128" | sudo tee -a /etc/sysctl.conf
-    
-    # For 4TB RAM
-    echo "vm.max_map_count=33554432" | sudo tee -a /etc/sysctl.conf
 
-    sudo sysctl -p
-    ```
-### Bitcoin node, Memgraph, Timescale and Indexer
+### Bitcoin node, Memgraph Real Time, Memgraph Archive, Timescale and Indexer
  
 - **Running Bitcoin node**
 
@@ -76,7 +52,7 @@
     docker compose up -d bitcoin-core
     ```
 
-- **Running Memgraph**
+- **Running Real time instance of Memgraph**
 
     Open the ```.env``` file:
     ```
@@ -88,10 +64,54 @@
     GRAPH_DB_USER=your_secret_user_name
     GRAPH_DB_PASSWORD=your_secret_password
     ```
+  
+    Configure Max Map Count:
+    ```bash
+    # For 1TB RAM
+    echo "vm.max_map_count=8388608" | sudo tee -a /etc/sysctl.conf
+    
+    # For 1.5TB RAM
+    echo "vm.max_map_count=12582912" | sudo tee -a /etc/sysctl.conf
+    
+    # For 2TB RAM
+    echo "vm.max_map_count=16777216" | sudo tee -a /etc/sysctl.conf
+    
+    # For 2.5TB RAM
+    echo "vm.max_map_count=20971520" | sudo tee -a /etc/sysctl.conf
+    
+    # For 3TB RAM
+    echo "vm.max_map_count=25165824" | sudo tee -a /etc/sysctl.conf
+    
+    # For 3.5TB RAM
+    echo "vm.max_map_count=29360128" | sudo tee -a /etc/sysctl.conf
+    
+    # For 4TB RAM
+    echo "vm.max_map_count=33554432" | sudo tee -a /etc/sysctl.conf
 
+    sudo sysctl -p
+    ```
+  
     Start the Memgraph
     ```
     docker compose up -d memgraph
+    ```
+  
+- **Running Archive instance of Memgraph**
+
+    Open the ```.env``` file:
+    ```
+    nano .env
+    ```
+
+    Set the required variables in the ```.env``` file and save it:
+    ```ini
+    GRAPH_DB_USER=your_secret_user_name
+    GRAPH_DB_PASSWORD=your_secret_password
+    ``` 
+  
+    Start the Memgraph
+    ```
+    docker compose up -d memgraph-archive
     ```
 
 - **Running Postgres with TimescaleDB extension**
@@ -149,7 +169,7 @@
 
     In REVERSE ORDER, START_BLOCK should be greater than END_BLOCK. You can specify multiple pickle files separated by comma. 
     ```bash
-    BITCOIN_INDEXER_IN_REVERSE_ORDER=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=0 BITCOIN_V2_TX_OUT_HASHMAP_PICKLES=700000-830000.pkl pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name reverse-indexer
+    BITCOIN_INDEXER_IN_REVERSE_ORDER=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=0 BITCOIN_V2_TX_OUT_HASHMAP_PICKLES=700000-830000.pkl pm2 start ./scripts/run_block_stream.sh --name reverse-indexer
     ```
 
     You can monitor the progress using the following command:
@@ -167,7 +187,7 @@
 
     Start the forward indexer. We set END_BLOCK to -1 so that indexer keeps indexing blocks in real-time:
     ```bash
-    BITCOIN_INDEXER_IN_REVERSE_ORDER=0 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=-1 pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name forward-indexer
+    BITCOIN_INDEXER_IN_REVERSE_ORDER=0 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=-1 pm2 start ./scripts/run_block_stream.sh --name forward-indexer
     ```
 
     You can monitor the progress using the following command:
@@ -188,7 +208,7 @@
 
     Start the smart indexer:
     ```bash
-    BITCOIN_INDEXER_SMART_MODE=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name smart-indexer
+    BITCOIN_INDEXER_SMART_MODE=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 pm2 start ./scripts/run_block_stream.sh --name smart-indexer
     ```
 
     You can monitor the progress using the following command:

@@ -5,10 +5,9 @@ import threading
 import time
 import json
 import traceback
-
 from confluent_kafka.admin import AdminClient
 from confluent_kafka import admin
-from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text
+from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text, String, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker
 from confluent_kafka import Producer
 from loguru import logger
@@ -17,13 +16,18 @@ from node.node_utils import parse_block_data
 
 Base = declarative_base()
 
+TOPIC_NAME = "transactions"
+
 
 class BlockStreamState(Base):
     __tablename__ = 'block_stream_state'
     block_height = Column(Integer, nullable=False)
+    topic = Column(String, nullable=False)
+    network = Column(String, nullable=False)
 
     __table_args__ = (
-        PrimaryKeyConstraint('block_height'),
+        PrimaryKeyConstraint('block_height', 'topic', 'network'),
+        UniqueConstraint('block_height', 'topic', network),
     )
 
 
@@ -42,42 +46,45 @@ class BlockStreamStateManager:
     def close(self):
         self.engine.dispose()
 
-    def add_block_height(self, block_height):
+    def add_block_height(self, block_height, topic=TOPIC_NAME, network="bitcoin"):
         with self.Session() as session:
-            upsert_query = text("""INSERT INTO transaction_processor_state (block_height) VALUES (:block_height) ON CONFLICT DO NOTHING""")
-            session.execute(upsert_query, {"block_height": block_height})
+            upsert_query = text("""INSERT INTO block_stream_state (block_height, topic, network) VALUES (:block_height, :topic, :network) ON CONFLICT DO NOTHING""")
+            session.execute(upsert_query, {"block_height": block_height, "topic": topic, "network": network})
             session.commit()
 
-    def get_last_block_height(self):
+    def get_last_block_height(self, topic=TOPIC_NAME, network="bitcoin"):
         with self.Session() as session:
-            ranges_query = text("""SELECT block_height FROM transaction_processor_state ORDER BY block_height DESC LIMIT 1""")
-            result = session.execute(ranges_query).fetchone()
+            ranges_query = text("""SELECT block_height FROM block_stream_state WHERE topic = :topic AND network = :network ORDER BY block_height DESC LIMIT 1""")
+            result = session.execute(ranges_query, {"topic": topic, "network": network}).fetchone()
             if result is None:
                 return -1
             return result[0]
 
-    def check_if_block_height_is_indexed(self, block_height):
+    def check_if_block_height_is_indexed(self, block_height, topic=TOPIC_NAME, network="bitcoin"):
         with self.Session() as session:
-            ranges_query = text("""SELECT block_height FROM transaction_processor_state WHERE block_height = :block_height LIMIT 1 """)
-            block_height = session.execute(ranges_query, {"block_height": block_height}).scalar_one_or_none()
+            ranges_query = text("""SELECT block_height FROM block_stream_state WHERE block_height = :block_height AND topic = :topic AND network = :network""")
+            block_height = session.execute(ranges_query, {"block_height": block_height, "topic": topic, "network": network}).fetchone()
             return block_height is not None
 
 
-class BlockHeightPartitioner:
-    def __init__(self, num_partitions, range_size=1000):
+class BlockRangePartitioner:
+    def __init__(self, num_partitions, range_size=50000):
         self.num_partitions = num_partitions
         self.range_size = range_size
 
     def __call__(self, block_height):
-        partition = (block_height // self.range_size) % self.num_partitions
+        partition = block_height // self.range_size
+        if partition >= self.num_partitions:
+            partition = self.num_partitions - 1
         return int(partition)
+
 
 class BlockStreamProducer:
     def __init__(self, kafka_config, bitcoin_node):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
 
-        self.topic_name = "bitcoin-block-transactions-stream"
+        self.topic_name = TOPIC_NAME
         self.num_partitions = 64
         self.partitioner = BlockHeightPartitioner(self.num_partitions)
 
@@ -267,8 +274,8 @@ if __name__ == "__main__":
     bitcoin_node = BitcoinNode()
     block_stream_state_manager = BlockStreamStateManager(db_url)
     kafka_config = {
-        'bootstrap.servers': redpanda_bootstrap_servers,  # Replace with your Redpanda/Kafka broker
-        'group.id': 'bitcoin-block-transactions-stream',
+        'bootstrap.servers': redpanda_bootstrap_servers,
+        'group.id': TOPIC_NAME,
         'enable.idempotence': True,
         'auto.offset.reset': 'earliest'
     }
