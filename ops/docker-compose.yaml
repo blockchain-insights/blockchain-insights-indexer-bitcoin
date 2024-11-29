@@ -28,8 +28,8 @@ services:
       - "7687:7687"
       - "7444:7444"
     environment:
-      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_USER}
-      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_PASSWORD}
+      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_USER:-mario}
+      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_PASSWORD:-mariobros667}
     command: ["--storage-properties-on-edges=true", "--storage-recovery-thread-count=60", "--storage-gc-cycle-sec=300", "--log-level=TRACE", "--also-log-to-stderr", "--storage-snapshot-on-exit=false", "--storage-snapshot-interval-sec=14400", "--storage-snapshot-retention-count=2", "--storage-wal-enabled=true", "--isolation-level=READ_COMMITTED", "--replication-restore-state-on-startup=true", "--query-execution-timeout-sec=0"]
     volumes:
       - money-flow-memgraph-data:/var/lib/memgraph
@@ -44,8 +44,8 @@ services:
       - "7688:7687"
       - "7445:7444"
     environment:
-      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_ARCHIVE_USER}
-      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD}
+      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_ARCHIVE_USER:-mario}
+      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD:-mariobros667}
     command: ["--storage-mode=ON_DISK_TRANSACTIONAL", "--storage-parallel-schema-recovery=true", "--storage-properties-on-edges=true", "--storage-recovery-thread-count=60",  "--log-level=TRACE", "--also-log-to-stderr",  "--query-execution-timeout-sec=0" ]
     volumes:
       - money-flow-memgraph-archive-data:/var/lib/memgraph

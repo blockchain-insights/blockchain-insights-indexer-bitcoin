@@ -13,6 +13,7 @@ from confluent_kafka.admin import AdminClient
 from loguru import logger
 
 from balance_indexer import BalanceIndexer
+from models import BLOCK_STREAM_TOPIC_NAME
 
 
 @dataclass
@@ -60,7 +61,7 @@ class BalanceIndexerConsumer:
             kafka_config: dict,
             consumer_state_manager: ConsumerStateManager,
             terminate_event: threading.Event,
-            topic_name: str = "transactions"
+            topic_name: str = BLOCK_STREAM_TOPIC_NAME
     ):
         self.consumer = Consumer(kafka_config)
         self.admin_client = AdminClient(kafka_config)
@@ -250,7 +251,7 @@ def main():
 
     db_url = os.getenv(
         "REDPANDA_DB_CONNECTION_STRING",
-        "postgresql://postgres:changeit456$@localhost:5420/redpanda"
+        "postgresql://postgres:changeit456$@localhost:5420/block_stream"
     )
     redpanda_bootstrap_servers = os.getenv(
         "REDPANDA_BOOTSTRAP_SERVERS",

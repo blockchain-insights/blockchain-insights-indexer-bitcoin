@@ -21,7 +21,7 @@ class BlockStreamCursorManager:
     def __init__(self, db_url: str = None):
         if db_url is None:
             self.db_url = os.environ.get("DB_CONNECTION_STRING",
-                                         f"postgresql://postgres:changeit456$@localhost:5432/redpanda")
+                                         f"postgresql://postgres:changeit456$@localhost:5420/block_stream")
         else:
             self.db_url = db_url
         self.engine = create_engine(self.db_url)

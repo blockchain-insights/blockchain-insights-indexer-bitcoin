@@ -7,63 +7,12 @@ import json
 import traceback
 from confluent_kafka.admin import AdminClient
 from confluent_kafka import admin
-from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text, String, UniqueConstraint
-from sqlalchemy.orm import declarative_base, sessionmaker
 from confluent_kafka import Producer
 from loguru import logger
+from models import BLOCK_STREAM_TOPIC_NAME
+from models.block_stream_state import BlockStreamStateManager
 from node.node import BitcoinNode
 from node.node_utils import parse_block_data
-
-Base = declarative_base()
-TOPIC_NAME = "transactions"
-
-
-class BlockStreamState(Base):
-    __tablename__ = 'block_stream_state'
-    block_height = Column(Integer, nullable=False)
-    topic = Column(String, nullable=False)
-    network = Column(String, nullable=False)
-
-    __table_args__ = (
-        PrimaryKeyConstraint('block_height', 'topic', 'network'),
-        UniqueConstraint('block_height', 'topic', network),
-    )
-
-
-class BlockStreamStateManager:
-    def __init__(self, db_url: str = None):
-        if db_url is None:
-            self.db_url = os.environ.get("DB_CONNECTION_STRING",
-                                         f"postgresql://postgres:changeit456$@localhost:5432/miner")
-        else:
-            self.db_url = db_url
-        self.engine = create_engine(self.db_url)
-        self.Session = sessionmaker(bind=self.engine)
-
-        Base.metadata.create_all(self.engine)
-
-    def close(self):
-        self.engine.dispose()
-
-    def add_block_height(self, block_height, topic=TOPIC_NAME, network="bitcoin"):
-        with self.Session() as session:
-            upsert_query = text("""INSERT INTO block_stream_state (block_height, topic, network) VALUES (:block_height, :topic, :network) ON CONFLICT DO NOTHING""")
-            session.execute(upsert_query, {"block_height": block_height, "topic": topic, "network": network})
-            session.commit()
-
-    def get_last_block_height(self, topic=TOPIC_NAME, network="bitcoin"):
-        with self.Session() as session:
-            ranges_query = text("""SELECT block_height FROM block_stream_state WHERE topic = :topic AND network = :network ORDER BY block_height DESC LIMIT 1""")
-            result = session.execute(ranges_query, {"topic": topic, "network": network}).fetchone()
-            if result is None:
-                return -1
-            return result[0]
-
-    def check_if_block_height_is_indexed(self, block_height, topic=TOPIC_NAME, network="bitcoin"):
-        with self.Session() as session:
-            ranges_query = text("""SELECT block_height FROM block_stream_state WHERE block_height = :block_height AND topic = :topic AND network = :network""")
-            block_height = session.execute(ranges_query, {"block_height": block_height, "topic": topic, "network": network}).fetchone()
-            return block_height is not None
 
 
 class BlockRangePartitioner:
@@ -83,7 +32,7 @@ class BlockStreamProducer:
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
 
-        self.topic_name = TOPIC_NAME
+        self.topic_name = BLOCK_STREAM_TOPIC_NAME
         self.num_partitions = 64
         self.partitioner = BlockRangePartitioner(self.num_partitions)
 
@@ -235,7 +184,7 @@ terminate_event = threading.Event()
 
 def shutdown_handler(signum, frame):
     logger.info(
-        "Shutdown signal received. Waiting for current indexing to complete before shutting down."
+        "Shutdown signal received. Waiting for current processing to complete before shutting down."
     )
     terminate_event.set()
 
@@ -245,12 +194,12 @@ if __name__ == "__main__":
     load_dotenv()
 
     def patch_record(record):
-        record["extra"]["service"] = 'bitcoin-block-streamer'
+        record["extra"]["service"] = 'bitcoin-block-stream'
         return True
 
     logger.remove()
     logger.add(
-        "../../logs/bbitcoin-block-streamer.log",
+        "../../logs/bitcoin-block-stream.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",
@@ -267,16 +216,14 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    db_url = os.getenv("REDPANDA_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/redpanda")
-    redpanda_bootstrap_servers = os.getenv("REDPANDA_BOOTSTRAP_SERVERS", "localhost:19092")
+    db_url = os.getenv("BLOCK_STREAM_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/block_stream")
+    redpanda_bootstrap_servers = os.getenv("BLOCK_STREAM_REDPANDA_BOOTSTRAP_SERVERS", "localhost:19092")
 
     bitcoin_node = BitcoinNode()
     block_stream_state_manager = BlockStreamStateManager(db_url)
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
-        'group.id': TOPIC_NAME,
         'enable.idempotence': True,
-        'auto.offset.reset': 'earliest'
     }
     block_stream_producer = BlockStreamProducer(kafka_config, bitcoin_node)
     logger.info("Starting block stream")
