@@ -1,4 +1,8 @@
-from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, DateTime, create_engine
+from datetime import datetime
+from typing import Optional
+
+from loguru import logger
+from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, DateTime, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -20,33 +24,65 @@ class BlockStreamCursorManager:
         self.engine = create_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
 
+        # Ensure tables exist
         Base.metadata.create_all(self.engine)
 
     def close(self):
         self.engine.dispose()
 
-    def get_cursor(self, consumer_name, partition):
-        with self.Session() as session:
-            cursor = session.query(BlockStreamCursor).filter(BlockStreamCursor.consumer_name == consumer_name, BlockStreamCursor.partition == partition).first()
-            return cursor
-
-    def set_cursor(self, consumer_name, partition, offset, timestamp):
-        with self.Session() as session:
-            session.execute(
-                """
-                INSERT INTO consumer_cursor (consumer_name, partition, offset, timestamp)
-                VALUES (:consumer_name, :partition, :offset, :timestamp)
-                ON CONFLICT (consumer_name) DO UPDATE SET
-                    partition = EXCLUDED.partition,
-                    offset = EXCLUDED.offset,
-                    timestamp = EXCLUDED.timestamp
-                """,
-                {
-                    'consumer_name': consumer_name,
-                    'partition': partition,
-                    'offset': offset,
-                    'timestamp': timestamp
+    def get_cursor(self, consumer_name: str, partition: int) -> Optional[BlockStreamCursor]:
+        """
+        Get cursor for specified consumer and partition.
+        Returns None if no cursor exists.
+        """
+        try:
+            with self.Session() as session:
+                cursor = session.query(BlockStreamCursor).filter(
+                    BlockStreamCursor.consumer_name == consumer_name,
+                    BlockStreamCursor.partition == partition
+                ).first()
+                return cursor
+        except Exception as e:
+            logger.error(
+                "Failed to get cursor",
+                extra={
+                    "consumer_name": consumer_name,
+                    "partition": partition,
+                    "error": str(e)
                 }
             )
-            session.commit()
+            raise
 
+    def set_cursor(self, consumer_name: str, partition: int, offset: int, timestamp: datetime) -> None:
+        """Set cursor position for consumer."""
+        try:
+            with self.Session() as session:
+                try:
+                    session.execute(
+                        text("""
+                            WITH upsert AS (
+                                UPDATE block_stream_cursor SET
+                                    "offset" = :offset,
+                                    timestamp = :timestamp
+                                WHERE consumer_name = :consumer_name 
+                                AND partition = :partition
+                                RETURNING *
+                            )
+                            INSERT INTO block_stream_cursor (consumer_name, partition, "offset", timestamp)
+                            SELECT :consumer_name, :partition, :offset, :timestamp
+                            WHERE NOT EXISTS (SELECT * FROM upsert)
+                        """),
+                        {
+                            'consumer_name': consumer_name,
+                            'partition': partition,
+                            'offset': offset,
+                            'timestamp': timestamp
+                        }
+                    )
+                    session.commit()
+                except Exception as e:
+                    session.rollback()
+                    raise e
+        except Exception as e:
+            logger.error("Failed to set cursor", error=str(e))
+            raise e

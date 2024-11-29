@@ -43,7 +43,7 @@ class BlockStreamConsumer:
             message = self.consumer.poll(timeout=1.0)
 
             if message is None:
-                break
+                continue
 
             if message.error():
                 logger.error("Consumer error", error=message.error())
@@ -75,6 +75,8 @@ class BlockStreamConsumer:
                 offset,
                 datetime.now()
             )
+
+            logger.info("Processed transaction", block_height=transaction["block_height"], tx_id=transaction["tx_id"], partition=partition, offset=offset)
 
         except Exception as e:
             logger.error(
@@ -155,3 +157,7 @@ if __name__ == "__main__":
     finally:
         block_stream_cursor_manager.close()
         logger.info("Balance indexer consumer stopped")
+
+
+
+        #TODO: fee is calculated invalid, as it -coinbase BTC amount
