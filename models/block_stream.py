@@ -15,7 +15,6 @@ from node.node import BitcoinNode
 from node.node_utils import parse_block_data
 
 Base = declarative_base()
-
 TOPIC_NAME = "transactions"
 
 
@@ -86,7 +85,7 @@ class BlockStreamProducer:
 
         self.topic_name = TOPIC_NAME
         self.num_partitions = 64
-        self.partitioner = BlockHeightPartitioner(self.num_partitions)
+        self.partitioner = BlockRangePartitioner(self.num_partitions)
 
         self.admin_client = AdminClient(kafka_config)
         self.ensure_topic_exists()

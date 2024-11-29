@@ -1,9 +1,5 @@
 import os
-from setup_logger import setup_logger
-from setup_logger import logger_extra_data
 from neo4j import GraphDatabase
-
-logger = setup_logger("GraphIndexer")
 
 
 class GraphIndexer:
@@ -37,50 +33,6 @@ class GraphIndexer:
 
     def close(self):
         self.driver.close()
-
-    def check_database_type(self):
-        with self.driver.session() as session:
-            try:
-                # Try Neo4j-specific query first
-                result = session.run("CALL dbms.components() YIELD name, versions, edition")
-                print("result {}".format(result))
-                record = result.single()
-                print("record {}".format(record))
-
-                if record and "Neo4j" in record["name"]:
-                    version = record["versions"][0]
-                    edition = record["edition"]
-                    return f"Neo4j {edition} {version}"
-                if record and "Memgraph" in record["name"]:
-                    version = record["versions"][0]
-                    edition = record["edition"]
-                    return f"Memgraph {edition} {version}"
-            except Exception as e:
-                print(f"exception: {e}")
-                return "Unknown graph database"
-
-
-    def set_min_max_block_height_cache(self, min_block_height, max_block_height):
-        with self.driver.session() as session:
-            # update min block height
-            session.run(
-                """
-                MERGE (n:Cache {field: 'min_block_height'})
-                SET n.value = $min_block_height
-                RETURN n
-                """,
-                {"min_block_height": min_block_height}
-            )
-
-            # update max block height
-            session.run(
-                """
-                MERGE (n:Cache {field: 'max_block_height'})
-                SET n.value = $max_block_height
-                RETURN n
-                """,
-                {"max_block_height": max_block_height}
-            )
 
     def check_if_block_is_indexed(self, block_height: int) -> bool:
         with self.driver.session() as session:

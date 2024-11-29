@@ -1,15 +1,12 @@
 import os
 from datetime import datetime
 from typing import Optional
-
-from setup_logger import setup_logger, logger_extra_data
 import sqlalchemy as sa
+from loguru import logger
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.exc import SQLAlchemyError
 from .balance_model import BalanceChange, Block, BalanceAddressBlock
-
-logger = setup_logger("BalanceIndexer")
 
 
 class BalanceIndexer:
@@ -161,8 +158,6 @@ class BalanceIndexer:
                     conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} {definition};"))
                 logger.info("Created indexes")
 
-
-
                 # Create monitoring view and function
                 conn.execute(text("""
                     CREATE MATERIALIZED VIEW IF NOT EXISTS balance_tables_stats AS
@@ -298,7 +293,7 @@ class BalanceIndexer:
                     changed_addresses[address] = event_type
                 balance_changes_by_address[address] += out_amount_by_address[address]
 
-        logger.info(f"Adding row(s)...", extra=logger_extra_data(add_rows=len(changed_addresses)))
+        logger.info(f"Adding row(s)...", add_rows=len(changed_addresses))
 
         with self.Session() as session:
             try:
@@ -328,14 +323,7 @@ class BalanceIndexer:
             except SQLAlchemyError as e:
                 session.rollback()
                 logger.error(
-                    "An exception occurred",
-                    extra=logger_extra_data(
-                        error={
-                            'exception_type': e.__class__.__name__,
-                            'exception_message': str(e),
-                            'exception_args': e.args
-                        }
-                    )
+                    "An exception occurred",  error=e
                 )
                 return False
 
@@ -409,13 +397,6 @@ class BalanceIndexer:
             except SQLAlchemyError as e:
                 session.rollback()
                 logger.error(
-                    "An exception occurred",
-                    extra=logger_extra_data(
-                        error={
-                            'exception_type': e.__class__.__name__,
-                            'exception_message': str(e),
-                            'exception_args': e.args
-                        }
-                    )
+                    "An exception occurred", error=e
                 )
                 return False

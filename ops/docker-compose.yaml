@@ -1,8 +1,8 @@
 version: '3.8'
 
 services:
-  bitcoin-core:
-    image: ruimarinho/bitcoin-core:latest
+  blockchain-bitcoin:
+    image: dobtc/bitcoin:28.0
     command:
       -rpcuser=${RPC_USER}
       -rpcpassword=${RPC_PASSWORD}
@@ -12,86 +12,81 @@ services:
       -printtoconsole
       -rpcworkqueue=4086
       -server=1
+      -rest=1
       -txindex=1
     expose:
       - "8332:8332"
       - "8333:8333"
     volumes:
-      - bitcoin-data:/home/bitcoin/.bitcoin
+      - blockchain-bitcoin-data:/home/bitcoin/.bitcoin
     restart: unless-stopped
 
-  memgraph:
-    container_name: memgraph
+  money-flow-memgraph:
+    container_name: money-flow-memgraph
     image: memgraph/memgraph-mage:1.22-memgraph-2.22
     ports:
       - "7687:7687"
       - "7444:7444"
     environment:
-      - MEMGRAPH_USER=${GRAPH_DB_USER}
-      - MEMGRAPH_PASSWORD=${GRAPH_DB_PASSWORD}
-    command: ["--storage-parallel-schema-recovery=true", "--storage-properties-on-edges=true", "--storage-recovery-thread-count=60", "--storage-gc-cycle-sec=300", "--log-level=TRACE", "--also-log-to-stderr", "--storage-snapshot-on-exit=false", "--storage-snapshot-interval-sec=14400", "--storage-snapshot-retention-count=2", "--storage-wal-enabled=true", "--isolation-level=READ_COMMITTED", "--replication-restore-state-on-startup=true", "--query-execution-timeout-sec=0"]
+      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_USER}
+      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_PASSWORD}
+    command: ["--storage-properties-on-edges=true", "--storage-recovery-thread-count=60", "--storage-gc-cycle-sec=300", "--log-level=TRACE", "--also-log-to-stderr", "--storage-snapshot-on-exit=false", "--storage-snapshot-interval-sec=14400", "--storage-snapshot-retention-count=2", "--storage-wal-enabled=true", "--isolation-level=READ_COMMITTED", "--replication-restore-state-on-startup=true", "--query-execution-timeout-sec=0"]
     volumes:
-      - bitcoin-memgraph-data:/var/lib/memgraph
-      - bitcoin-memgraph-log:/var/log/memgraph
-      - bitcoin-memgraph-etc:/etc/memgraph
+      - money-flow-memgraph-data:/var/lib/memgraph
+      - money-flow-memgraph-log:/var/log/memgraph
+      - money-flow-memgraph-etc:/etc/memgraph
     restart: unless-stopped
 
-  memgraph-archive:
-    container_name: memgraph-archive
+  money-flow-memgraph-archive:
+    container_name: money-flow-memgraph-archive
     image: memgraph/memgraph-mage:1.22-memgraph-2.22
     ports:
-      - "7687:7687"
-      - "7444:7444"
+      - "7688:7687"
+      - "7445:7444"
     environment:
-      - MEMGRAPH_USER=${GRAPH_DB_USER}
-      - MEMGRAPH_PASSWORD=${GRAPH_DB_PASSWORD}
+      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_ARCHIVE_USER}
+      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD}
     command: ["--storage-mode=ON_DISK_TRANSACTIONAL", "--storage-parallel-schema-recovery=true", "--storage-properties-on-edges=true", "--storage-recovery-thread-count=60",  "--log-level=TRACE", "--also-log-to-stderr",  "--query-execution-timeout-sec=0" ]
     volumes:
-      - bitcoin-memgraph-archive-data:/var/lib/memgraph
-      - bitcoin-memgraph-archive-log:/var/log/memgraph
-      - bitcoin-memgraph-archive-etc:/etc/memgraph
+      - money-flow-memgraph-archive-data:/var/lib/memgraph
+      - money-flow-memgraph-archive-log:/var/log/memgraph
+      - money-flow-memgraph-archive-etc:/etc/memgraph
     restart: unless-stopped
-
 
   memgraph-lab:
     image: memgraph/lab:latest
     container_name: memgraph-lab
     ports:
       - "3000:3000"
-    depends_on:
-      - memgraph
     environment:
-      - QUICK_CONNECT_MG_HOST=memgraph
+      - QUICK_CONNECT_MG_HOST=money-flow-memgraph
       - QUICK_CONNECT_MG_PORT=7687
 
-  postgres:
+  timeseries-postgres:
     image: timescale/timescaledb:latest-pg16
-    expose:
-      - "5432:5432"
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data-miner:/var/lib/postgresql/data
+      - timeseries-postgres-data:/var/lib/postgresql/data
       - "./init.sql:/docker-entrypoint-initdb.d/init.sql"
     environment:
-      - POSTGRES_DB=${POSTGRES_DB:-miner}
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeit456$}
+      - POSTGRES_DB=${TIMESERIES_POSTGRES_DB:-timeseries}
+      - POSTGRES_USER=${TIMESERIES_POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${TIMESERIES_POSTGRES_PASSWORD:-changeit456$}
 
-  redpanda-postgres:
+  block-stream-postgres:
     image: postgres:16-alpine
-    expose:
-      - "5420:5432"
     ports:
       - "5420:5432"
     volumes:
-      - postgres-data-indexer:/var/lib/postgresql/data
+      - block-stream-postgres-data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_DB=${REDPANDA_POSTGRES_DB:-redpanda}
-      - POSTGRES_USER=${REDPANDA_POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${REDPANDA_POSTGRES_PASSWORD:-changeit456$}
+      - POSTGRES_DB=${BLOCK_STREAM_POSTGRES_DB:-block_stream}
+      - POSTGRES_USER=${BLOCK_STREAM_POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${BLOCK_STREAM_POSTGRES_PASSWORD:-changeit456$}
 
-  redpanda:
+  block-stream-redpanda:
+    container_name: block-stream-redpanda-0
     command:
       - redpanda
       - start
@@ -101,23 +96,22 @@ services:
       # from inside the same Docker network.
       # Use the external addresses to connect to the Redpanda brokers'
       # from outside the Docker network.
-      - --advertise-kafka-addr internal://redpanda-0:9092,external://localhost:19092
+      - --advertise-kafka-addr internal://block-stream-redpanda-0:9092,external://localhost:19092
       - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
       # Address the broker advertises to clients that connect to the HTTP Proxy.
-      - --advertise-pandaproxy-addr internal://redpanda-0:8082,external://localhost:18082
+      - --advertise-pandaproxy-addr internal://block-stream-redpanda-0:8082,external://localhost:18082
       - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
       # Redpanda brokers use the RPC API to communicate with each other internally.
-      - --rpc-addr redpanda-0:33145
-      - --advertise-rpc-addr redpanda-0:33145
+      - --rpc-addr block-stream-redpanda-0:33145
+      - --advertise-rpc-addr block-stream-redpanda-0:33145
       # Mode dev-container uses well-known configuration properties for development in containers.
       - --mode dev-container
       # Tells Seastar (the framework Redpanda uses under the hood) to use 1 core on the system.
       - --smp 1
       - --default-log-level=info
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
-    container_name: redpanda-0
     volumes:
-      - redpanda-data-indexer:/var/lib/redpanda/data
+      - block-stream-redpanda-data:/var/lib/redpanda/data
     ports:
       - 18081:18081
       - 18082:18082
@@ -133,38 +127,41 @@ services:
       CONFIG_FILEPATH: /tmp/config.yml
       CONSOLE_CONFIG_FILE: |
           kafka:
-            brokers: ["redpanda:9092"]
+            brokers: ["block-stream-redpanda:9092"]
             schemaRegistry:
               enabled: true
-              urls: ["http://redpanda:8081"]
+              urls: ["http://block-stream-redpanda:8081"]
           redpanda:
             adminApi:
               enabled: true
-              urls: ["http://redpanda:9644"]
+              urls: ["http://block-stream-redpanda:9644"]
     ports:
       - 8080:8080
     depends_on:
-      - redpanda
+      - block-stream-redpanda
 
-    
 volumes:
-  bitcoin-data:
-    name: bitcoin-data
-  bitcoin-memgraph-data:
-    name: bitcoin-memgraph-data
-  bitcoin-memgraph-log:
-    name: bitcoin-memgraph-log
-  bitcoin-memgraph-etc:
-    name: bitcoin-memgraph-etc
-  bitcoin-memgraph-archive-data:
-    name: bitcoin-memgraph-archive-data
-  bitcoin-memgraph-archive-log:
-    name: bitcoin-memgraph-archive-log
-  bitcoin-memgraph-archive-etc:
-    name: bitcoin-memgraph-archive-etc
-  postgres-data-miner:
-    name: "postgres-data-miner"
-  postgres-data-indexer:
-    name: "postgres-data-indexer"
-  redpanda-data-indexer:
-    name: "redpanda-data-indexer"
+  blockchain-bitcoin-data:
+    name: blockchain-bitcoin-data
+
+  money-flow-memgraph-data:
+    name: money-flow-memgraph-data
+  money-flow-memgraph-log:
+    name: money-flow-memgraph-log
+  money-flow-memgraph-etc:
+    name: money-flow-memgraph-etc
+
+  money-flow-memgraph-archive-data:
+    name: money-flow-memgraph-archive-data
+  money-flow-memgraph-archive-log:
+    name: money-flow-memgraph-archive-log
+  money-flow-memgraph-archive-etc:
+    name: money-flow-memgraph-archive-etc
+
+  timeseries-postgres-data:
+    name: timeseries-postgres-data
+  block-stream-postgres-data:
+    name: block-stream-postgres-data
+
+  block-stream-redpanda-data:
+    name: block-stream-redpanda-data

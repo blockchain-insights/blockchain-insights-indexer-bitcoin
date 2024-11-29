@@ -1,10 +1,6 @@
 import os
-
-from setup_logger import setup_logger
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-
-logger = setup_logger("BalanceSearch")
 
 
 class BalanceSearch:

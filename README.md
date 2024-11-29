@@ -185,11 +185,6 @@
     pm2 delete reverse-indexer
     ```
 
-    Start the forward indexer. We set END_BLOCK to -1 so that indexer keeps indexing blocks in real-time:
-    ```bash
-    BITCOIN_INDEXER_IN_REVERSE_ORDER=0 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=-1 pm2 start ./scripts/run_block_stream.sh --name forward-indexer
-    ```
-
     You can monitor the progress using the following command:
     ```bash
     ./script/funds_flow_finds_indexed_block_height_ranges.sh

@@ -10,7 +10,6 @@ from .node_utils import (
     create_p2sh_address,
     Transaction, SATOSHI, VOUT, VIN, derive_address
 )
-from setup_logger import logger_extra_data
 
 from .node_utils import initialize_tx_out_hash_table, get_tx_out_hash_table_sub_keys
 
@@ -22,15 +21,6 @@ import os
 class BitcoinNode(Node):
     def __init__(self, node_rpc_url: str = None):
         self.tx_out_hash_table = initialize_tx_out_hash_table()
-        pickle_files_env = os.environ.get("BITCOIN_V2_TX_OUT_HASHMAP_PICKLES")
-        pickle_files = []
-        if pickle_files_env:
-            pickle_files = pickle_files_env.split(',')
-
-        for pickle_file in pickle_files:
-            if pickle_file:
-                self.load_tx_out_hash_table(pickle_file)
-
         if node_rpc_url is None:
             self.node_rpc_url = (
                     os.environ.get("BITCOIN_NODE_RPC_URL")
@@ -38,21 +28,6 @@ class BitcoinNode(Node):
             )
         else:
             self.node_rpc_url = node_rpc_url
-
-    def load_tx_out_hash_table(self, pickle_path: str, reset: bool = False):
-        logger.info(f"Loading tx_out hash table", extra=logger_extra_data(pickle_path=pickle_path))
-        with open(pickle_path, 'rb') as file:
-            start_time = time.time()
-            hash_table = pickle.load(file)
-            if reset:
-                self.tx_out_hash_table = hash_table
-            else:
-                sub_keys = get_tx_out_hash_table_sub_keys()
-                for sub_key in sub_keys:
-                    self.tx_out_hash_table[sub_key].update(hash_table[sub_key])
-            end_time = time.time()
-            logger.info(f"Successfully loaded tx_out hash table",
-                        extra=logger_extra_data(pickle_path=pickle_path, duration=f"{end_time - start_time}"))
 
     def get_current_block_height(self):
         rpc_connection = AuthServiceProxy(self.node_rpc_url)

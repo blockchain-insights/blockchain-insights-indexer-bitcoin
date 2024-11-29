@@ -1,15 +1,12 @@
 import time
 import signal
+from loguru import logger
 from node.node import BitcoinNode
-from setup_logger import setup_logger
-from setup_logger import logger_extra_data
 from node.node_utils import parse_block_data
 from models.balance_tracking.balance_indexer import BalanceIndexer
 
-
 # Global flag to signal shutdown
 shutdown_flag = False
-logger = setup_logger("Indexer")
 
 
 def shutdown_handler(signum, frame):
@@ -25,8 +22,7 @@ def index_block_batch(_bitcoin_node, _balance_indexer, start_height: int, batch_
 
     blocks = _bitcoin_node.get_blocks_by_height_range(start_height, end_height)
     if not blocks:
-        logger.error(f"Failed to fetch blocks",
-                     extra=logger_extra_data(start_height=start_height, end_height=end_height))
+        logger.error(f"Failed to fetch blocks", start_height=start_height, end_height=end_height)
         return False
 
     start_time = time.time()
@@ -41,14 +37,12 @@ def index_block_batch(_bitcoin_node, _balance_indexer, start_height: int, batch_
 
     if success:
         logger.info(
-            "Batch processed",
-            extra=logger_extra_data(start_height=f"{start_height:>6}",
-                                    end_height=f"{end_height:>6}",
-                                    blocks=len(blocks),
-                                    transactions=f"{total_transactions:>6}",
-                                    time_taken=f"{time_taken:>6.2f}",
-                                    tps=f"{total_transactions/time_taken:8.2f}" if time_taken > 0 else "inf",)
-        )
+            "Batch processed", start_height=f"{start_height:>6}",
+                               end_height=f"{end_height:>6}",
+                               blocks=len(blocks),
+                               transactions=f"{total_transactions:>6}",
+                               time_taken=f"{time_taken:>6.2f}",
+                               tps=f"{total_transactions/time_taken:8.2f}" if time_taken > 0 else "inf",)
 
     return success
 
@@ -68,21 +62,14 @@ def index_block(_bitcoin_node, _balance_indexer, block_height):
 
     if time_taken > 0:
         logger.info(
-            "Block Processed transactions",
-            extra = logger_extra_data(
-                block_height = f"{block_height:>6}",
-                num_transactions = formatted_num_transactions,
-                time_taken = formatted_time_taken,
-                tps = formatted_tps,
-            )
+            "Block Processed transactions", block_height=f"{block_height:>6}",
+                num_transactions=formatted_num_transactions,
+                time_taken=formatted_time_taken,
+                tps=formatted_tps
         )
     else:
         logger.info(
-            "Block Processed transactions in 0.00 seconds (  Inf TPS).",
-            extra = logger_extra_data(
-                block_height = f"{block_height:>6}",
-                num_transactions = formatted_num_transactions
-            )
+            "Block Processed transactions in 0.00 seconds (  Inf TPS).", block_height = f"{block_height:>6}",  num_transactions = formatted_num_transactions
         )
         
     return success
@@ -100,7 +87,7 @@ def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 0):
     while not shutdown_flag:
         current_block_height = _bitcoin_node.get_current_block_height() - skip_blocks
         if block_height > current_block_height:
-            logger.info(f"Waiting for new blocks.", extra = logger_extra_data(current_block_height = current_block_height))
+            logger.info(f"Waiting for new blocks.", current_block_height=current_block_height)
             time.sleep(10)
             continue
 
@@ -112,7 +99,7 @@ def move_forward(_bitcoin_node, _balance_indexer, start_block_height = 0):
         if success:
             block_height += current_batch_size
         else:
-            logger.error(f"Failed to index batch.", extra = logger_extra_data(block_height = block_height))
+            logger.error(f"Failed to index batch.", block_height=block_height)
             time.sleep(30)
 
 # Register the shutdown handler for SIGINT and SIGTERM
@@ -136,3 +123,7 @@ if __name__ == "__main__":
 
     balance_indexer.close()
     logger.info("Indexer stopped")
+
+
+# TODO: create stream consumer here, it should store cursor of partition and block numer in db and indexer name (multitenancy)
+#TODO: add transaction stream tables to ?? blance tacking ??

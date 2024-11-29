@@ -46,26 +46,3 @@ class GraphSearch:
             if single_result is None:
                 return [0, 0]
             return single_result.get('min_block_height'), single_result.get('max_block_height')
-        
-    def get_min_max_block_height_cache(self):
-        with self.driver.session() as session:
-            result_min = session.run(
-                """
-                MATCH (n:Cache {field: 'min_block_height'})
-                RETURN n.value
-                LIMIT 1;
-                """
-            ).single()
-            
-            result_max = session.run(
-                """
-                MATCH (n:Cache {field: 'max_block_height'})
-                RETURN n.value
-                LIMIT 1;
-                """
-            ).single()
-            
-            min_block_height = result_min[0] if result_min else 0
-            max_block_height = result_max[0] if result_max else 0
-
-            return min_block_height, max_block_height
