@@ -1,6 +1,4 @@
-import os
-
-from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, UniqueConstraint, DateTime, create_engine
+from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, DateTime, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 Base = declarative_base()
@@ -18,13 +16,8 @@ class BlockStreamCursor(Base):
 
 
 class BlockStreamCursorManager:
-    def __init__(self, db_url: str = None):
-        if db_url is None:
-            self.db_url = os.environ.get("DB_CONNECTION_STRING",
-                                         f"postgresql://postgres:changeit456$@localhost:5420/block_stream")
-        else:
-            self.db_url = db_url
-        self.engine = create_engine(self.db_url)
+    def __init__(self, db_url: str):
+        self.engine = create_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
 
         Base.metadata.create_all(self.engine)
@@ -32,14 +25,13 @@ class BlockStreamCursorManager:
     def close(self):
         self.engine.dispose()
 
-    def get_cursor(self, consumer_name):
+    def get_cursor(self, consumer_name, partition):
         with self.Session() as session:
-            cursor = session.query(ConsumerCursor).filter(ConsumerCursor.consumer_name == consumer_name).first()
+            cursor = session.query(BlockStreamCursor).filter(BlockStreamCursor.consumer_name == consumer_name, BlockStreamCursor.partition == partition).first()
             return cursor
 
     def set_cursor(self, consumer_name, partition, offset, timestamp):
         with self.Session() as session:
-            # upsert cursor using raw SQL
             session.execute(
                 """
                 INSERT INTO consumer_cursor (consumer_name, partition, offset, timestamp)

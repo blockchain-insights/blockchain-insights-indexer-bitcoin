@@ -3,5 +3,5 @@
   <component name="Black">
     <option name="sdkName" value="Python 3.10.12 WSL (Ubuntu): (/home/saroot/.virtualenvs/blockchain-data-subnet-indexer-bitcoin/bin/python)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10.12 WSL (Ubuntu-22.04): (/home/hyperbook/.virtualenvs/blockchain-data-subnet-indexer-bitcoin/bin/python)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.10.12 WSL (Ubuntu): (/home/ubuntu/.virtualenvs/blockchain-insights-indexer-bitcoin/bin/python)" project-jdk-type="Python SDK" />
 </project>
