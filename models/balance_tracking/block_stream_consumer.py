@@ -161,3 +161,5 @@ if __name__ == "__main__":
 
 
         #TODO: fee is calculated invalid, as it -coinbase BTC amount
+        # inregular number of vins and vouts?? aka check if 3 inserts are done ... make 1 db call, not 3 just build 1 query for insert !!! it will be atomic !!!
+        # there are no triggers executed, for balances, balance addresses, materialized view is not filled!
