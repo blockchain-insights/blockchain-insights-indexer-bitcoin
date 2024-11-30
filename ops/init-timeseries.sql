@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (tx_id, timestamp),
     CONSTRAINT check_fee CHECK (
-        (fee_amount = in_total_amount - out_total_amount) OR
+        (NOT is_coinbase AND fee_amount = in_total_amount - out_total_amount) OR
         (is_coinbase AND fee_amount = 0)
     )
 );

@@ -59,16 +59,9 @@ class BlockStreamConsumer:
 
         try:
             transaction = json.loads(message.value())
-            self.transaction_indexer.index_transaction(
-                tx=transaction,
-                timestamp=transaction["timestamp"],
-                block_height=transaction["block_height"],
-            )
 
-            # Update kafka offset
+            self.transaction_indexer.index_transaction(tx=transaction)
             self.consumer.commit(message)
-
-            # Update cursor position
             self.block_stream_cursor_manager.set_cursor(
                 CONSUMER_NAME,
                 partition,
@@ -160,6 +153,7 @@ if __name__ == "__main__":
 
 
 
-        #TODO: fee is calculated invalid, as it -coinbase BTC amount
-        # inregular number of vins and vouts?? aka check if 3 inserts are done ... make 1 db call, not 3 just build 1 query for insert !!! it will be atomic !!!
-        # there are no triggers executed, for balances, balance addresses, materialized view is not filled!
+        #TODO: investigate 0 fee transfers... in early blocks they are present, but not in later blocks .. but i need to check if my system works correctly
+        #TODO: validate indexed data, balaces, etc; last address balance does not work properly it contains negative amounts
+        #TODO: should be keep satoshi everywhere ?? NO - easier for human to debug/read/bugfix, no need to transform data in the application, no need to keep decimal precisions; ? how about ethereum and their token inregular precisions ?? at kraken we keept in satoshis, same at trade io;
+
