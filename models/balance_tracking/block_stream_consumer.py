@@ -155,5 +155,7 @@ if __name__ == "__main__":
 
         #TODO: investigate 0 fee transfers... in early blocks they are present, but not in later blocks .. but i need to check if my system works correctly
         #TODO: validate indexed data, balaces, etc; last address balance does not work properly it contains negative amounts
+
         #TODO: should be keep satoshi everywhere ?? NO - easier for human to debug/read/bugfix, no need to transform data in the application, no need to keep decimal precisions; ? how about ethereum and their token inregular precisions ?? at kraken we keept in satoshis, same at trade io;
 
+        #TODO: investigate https://bitcoincore.org/en/releases/28.0/

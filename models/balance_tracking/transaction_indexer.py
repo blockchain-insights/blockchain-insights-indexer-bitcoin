@@ -31,24 +31,32 @@ class TransactionIndexer:
                                      ELSE in_total_amount - out_total_amount 
                                 END as fee_amount
                             FROM json_to_record(:tx) AS d(
-                                tx_id varchar, tx_index int, timestamp varchar, 
+                                tx_id text, tx_index int, timestamp text, 
                                 block_height int, is_coinbase boolean,
                                 in_total_amount numeric, out_total_amount numeric
                             )
-                            ON CONFLICT (tx_id, timestamp) DO NOTHING
-                            RETURNING timestamp, tx_id
+                            ON CONFLICT (tx_id, block_height) DO NOTHING
+                            RETURNING tx_id, block_height
                         ),
                         input_insert AS (
-                            INSERT INTO transaction_inputs (tx_id, timestamp, address, amount)
-                            SELECT d.tx_id, t.timestamp, d.address, d.amount
-                            FROM json_to_recordset(:tx_vins) AS d(tx_id varchar, address varchar, amount numeric)
+                            INSERT INTO transaction_inputs (tx_id, address, amount, block_height)
+                            SELECT 
+                                d.tx_id,
+                                d.address, 
+                                d.amount,
+                                t.block_height
+                            FROM json_to_recordset(:tx_vins) AS d(tx_id text, address varchar, amount numeric)
                             CROSS JOIN tx_insert t
                             WHERE EXISTS (SELECT 1 FROM tx_insert)
                         ),
                         output_insert AS (
-                            INSERT INTO transaction_outputs (tx_id, timestamp, address, amount)
-                            SELECT d.tx_id, t.timestamp, d.address, d.amount
-                            FROM json_to_recordset(:tx_vouts) AS d(tx_id varchar, address varchar, amount numeric)
+                            INSERT INTO transaction_outputs (tx_id, address, amount, block_height)
+                            SELECT 
+                                d.tx_id,
+                                d.address, 
+                                d.amount,
+                                t.block_height
+                            FROM json_to_recordset(:tx_vouts) AS d(tx_id text, address varchar, amount numeric)
                             CROSS JOIN tx_insert t
                             WHERE EXISTS (SELECT 1 FROM tx_insert)
                         )
@@ -72,3 +80,4 @@ class TransactionIndexer:
                 session.rollback()
                 logger.error(f"Failed to index transaction {tx['tx_id']}", error=str(e))
                 raise
+
