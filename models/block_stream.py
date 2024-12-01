@@ -64,33 +64,34 @@ class BlockStreamProducer:
             logger.error(f"Error managing topic", error=e, trb=traceback.format_exc())
             raise
 
-    def process(self, block_data, batch_size=8):
+    def process(self, block_data):
         transactions = block_data.transactions
-        idx = 0
+
         try:
-            for i in range(0, len(transactions), batch_size):
-                batch_transactions = transactions[i: i + batch_size]
-                organized_transactions = []
-                for tx in batch_transactions:
-                    in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
+            organized_transactions = []
+            for i in range(0, len(transactions)):
+                tx = transactions[i]
+                in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
 
-                    inputs = [{"address": address, "amount": in_amount_by_address[address], "tx_id": tx.tx_id} for address in input_addresses]
-                    outputs = [{"address": address, "amount": out_amount_by_address[address], "tx_id": tx.tx_id} for address in output_addresses]
+                inputs = [{"address": address, "amount": in_amount_by_address[address], "tx_id": tx.tx_id} for address in input_addresses]
+                outputs = [{"address": address, "amount": out_amount_by_address[address], "tx_id": tx.tx_id} for address in output_addresses]
 
-                    organized_transactions.append({
-                        "tx_id": tx.tx_id,
-                        "tx_index": idx,
-                        "timestamp": tx.timestamp,
-                        "block_height": tx.block_height,
-                        "is_coinbase": tx.is_coinbase,
-                        "in_total_amount": in_total_amount,
-                        "out_total_amount": out_total_amount,
-                        "vins": inputs,
-                        "vouts": outputs,
-                    })
-                    idx = idx + 1
+                organized_transactions.append({
+                    "tx_id": tx.tx_id,
+                    "tx_index": i,
+                    "timestamp": tx.timestamp,
+                    "block_height": tx.block_height,
+                    "is_coinbase": tx.is_coinbase,
+                    "in_total_amount": in_total_amount,
+                    "out_total_amount": out_total_amount,
+                    "vins": inputs,
+                    "vouts": outputs,
+                    "size": tx.size,
+                    "vsize": tx.vsize,
+                    "weight": tx.weight
+                })
 
-                self._send_to_stream(self.topic_name, organized_transactions)
+            self._send_to_stream(self.topic_name, organized_transactions)
 
             return True
 
@@ -127,27 +128,31 @@ class BlockStream:
         self.terminate_event = terminate_event
 
     def index_block(self, block_height):
-        block = self.bitcoin_node.get_block_by_height(block_height)
-        num_transactions = len(block["tx"])
-        start_time = time.time()
-        block_data = parse_block_data(block)
+        try:
+            block = self.bitcoin_node.get_block_by_height(block_height)
+            num_transactions = len(block["tx"])
+            start_time = time.time()
+            block_data = parse_block_data(block)
 
-        success = self.block_stream_producer.process(block_data)
+            success = self.block_stream_producer.process(block_data)
 
-        end_time = time.time()
-        time_taken = end_time - start_time
-        formatted_num_transactions = "{:>4}".format(num_transactions)
-        formatted_time_taken = "{:6.2f}".format(time_taken)
-        formatted_tps = "{:8.2f}".format(
-            num_transactions / time_taken if time_taken > 0 else float("inf")
-        )
+            end_time = time.time()
+            time_taken = end_time - start_time
+            formatted_num_transactions = "{:>4}".format(num_transactions)
+            formatted_time_taken = "{:6.2f}".format(time_taken)
+            formatted_tps = "{:8.2f}".format(
+                num_transactions / time_taken if time_taken > 0 else float("inf")
+            )
 
-        if time_taken > 0:
-            logger.info("Streaming transactions", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions, time_taken=formatted_time_taken, tps=formatted_tps)
-        else:
-            logger.info("Streamed transactions in 0.00 seconds (  Inf TPS).", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions)
+            if time_taken > 0:
+                logger.info("Streaming transactions", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions, time_taken=formatted_time_taken, tps=formatted_tps)
+            else:
+                logger.info("Streamed transactions in 0.00 seconds (  Inf TPS).", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions)
 
-        return success
+            return success
+        except Exception as e:
+            logger.error(f"Failed to index block.", block_height=block_height, error=str(e))
+            return False
 
     def run(self, start_height: int):
         skip_blocks = 6

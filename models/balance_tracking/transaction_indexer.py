@@ -22,18 +22,21 @@ class TransactionIndexer:
                         WITH tx_insert AS (
                             INSERT INTO transactions (
                                 tx_id, tx_index, timestamp, block_height, is_coinbase,
-                                in_total_amount, out_total_amount, fee_amount
+                                in_total_amount, out_total_amount, fee_amount, 
+                                size, vsize, weight
                             ) 
                             SELECT 
                                 tx_id, tx_index, timestamp::timestamptz, block_height, is_coinbase,
                                 in_total_amount, out_total_amount,
                                 CASE WHEN is_coinbase THEN 0 
                                      ELSE in_total_amount - out_total_amount 
-                                END as fee_amount
+                                END as fee_amount,
+                                size, vsize, weight
                             FROM json_to_record(:tx) AS d(
                                 tx_id text, tx_index int, timestamp text, 
                                 block_height int, is_coinbase boolean,
-                                in_total_amount numeric, out_total_amount numeric
+                                in_total_amount numeric, out_total_amount numeric,
+                                size int, vsize int, weight int
                             )
                             ON CONFLICT (tx_id, block_height) DO NOTHING
                             RETURNING tx_id, block_height
