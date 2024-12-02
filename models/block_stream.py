@@ -223,8 +223,9 @@ if __name__ == "__main__":
 
     db_url = os.getenv("BLOCK_STREAM_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/block_stream")
     redpanda_bootstrap_servers = os.getenv("BLOCK_STREAM_REDPANDA_BOOTSTRAP_SERVERS", "localhost:19092")
+    bitcoin_node_rpc_url = os.getenv("BITCOIN_NODE_RPC_URL", "http://bitcoin-node:8332")
 
-    bitcoin_node = BitcoinNode()
+    bitcoin_node = BitcoinNode(bitcoin_node_rpc_url)
     block_stream_state_manager = BlockStreamStateManager(db_url)
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,

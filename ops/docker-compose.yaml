@@ -4,17 +4,19 @@ services:
   blockchain-bitcoin:
     image: dobtc/bitcoin:28.0
     command:
-      -rpcuser=${RPC_USER}
-      -rpcpassword=${RPC_PASSWORD}
-      -rpcallowip=${RPC_ALLOW_IP:-172.16.0.0/12}
-      -rpcbind=${RPC_BIND:-0.0.0.0}
-      -maxconnections=${MAX_CONNECTIONS:-512}
+      -rpcuser=${BITCOIN_NODE_RPC_USER}
+      -rpcpassword=${BITCOIN_NODE_RPC_PASSWORD}
+      -rpcallowip=${BITCOIN_NODE_RPC_ALLOW_IP:-172.16.0.0/12}
+      -rpcbind=${BITCOIN_NODE_RPC_BIND:-0.0.0.0}
+      -maxconnections=${BITCOIN_NODE_MAX_CONNECTIONS:-512}
       -printtoconsole
       -rpcworkqueue=4086
       -server=1
       -rest=1
       -txindex=1
-    expose:
+      -dbcache=${BITCOIN_NODE_DB_CACHE:-4096}
+      -par=${BITCOIN_NODE_PARALLEL_BLOCKS:-2}
+    ports:
       - "8332:8332"
       - "8333:8333"
     volumes:

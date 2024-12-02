@@ -151,8 +151,6 @@ if __name__ == "__main__":
         block_stream_cursor_manager.close()
         logger.info("Balance indexer consumer stopped")
 
-        # FEATURES TO ADD
-        # TODO: add transaction size, it will be needed for fees -- diff, tx and block size
         # TESTING:
         # TODO: investigate 0 fee transfers... in early blocks they are present, but not in later blocks .. but i need to check if my system works correctly
 

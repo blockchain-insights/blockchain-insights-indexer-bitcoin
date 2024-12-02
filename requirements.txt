@@ -1,5 +1,5 @@
 pydantic
-python-bitcoinrpc
+python-bitcoinlib
 python-dotenv
 neo4j
 bitcoin
