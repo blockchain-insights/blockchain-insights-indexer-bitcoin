@@ -12,3 +12,4 @@ sqlalchemy
 confluent_kafka
 loguru
 mgp
+pytest
