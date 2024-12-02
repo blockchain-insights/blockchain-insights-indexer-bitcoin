@@ -1,0 +1,1 @@
+CONSUMER_NAME = 'balance-tracking-consumer'

@@ -1,7 +1,9 @@
 # Bitcoin Indexer
 
 ## Hardware Requirements
-- MemGraph: 2TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
+- MemGraph (IN_MEMORY_TRANSACTIONAL): 2TB+ RAM, 32+ CPU cores, ~7TB+ SSD/nvme storage
+- MemGraph (ON_DISK_TRANSACTIONAL): 1TB+ RAM, 16+ CPU cores, ~7TB+ SSD/nvme storage
+- Redpanda: 0.256TB+ RAM, 8+ CPU cores, ~7TB+ SSD/nvme storage
 - Bitcoin full node: 1TB+ SSD/nvme storage, 8+ CPU cores, 64GB+ RAM
 - Indexer: 4+ CPU, 2 GB RAM
 
@@ -23,32 +25,8 @@
     ```bash
     cp .env.example .env
     ```
-- Configure Max Map Count:
-    ```bash
-    # For 1TB RAM
-    echo "vm.max_map_count=8388608" | sudo tee -a /etc/sysctl.conf
-    
-    # For 1.5TB RAM
-    echo "vm.max_map_count=12582912" | sudo tee -a /etc/sysctl.conf
-    
-    # For 2TB RAM
-    echo "vm.max_map_count=16777216" | sudo tee -a /etc/sysctl.conf
-    
-    # For 2.5TB RAM
-    echo "vm.max_map_count=20971520" | sudo tee -a /etc/sysctl.conf
-    
-    # For 3TB RAM
-    echo "vm.max_map_count=25165824" | sudo tee -a /etc/sysctl.conf
-    
-    # For 3.5TB RAM
-    echo "vm.max_map_count=29360128" | sudo tee -a /etc/sysctl.conf
-    
-    # For 4TB RAM
-    echo "vm.max_map_count=33554432" | sudo tee -a /etc/sysctl.conf
 
-    sudo sysctl -p
-    ```
-### Bitcoin node, Memgraph, Timescale and Indexer
+### Bitcoin node, Memgraph Real Time, Memgraph Archive, Timescale and Indexer
  
 - **Running Bitcoin node**
 
@@ -74,7 +52,7 @@
     docker compose up -d bitcoin-core
     ```
 
-- **Running Memgraph**
+- **Running Real time instance of Memgraph**
 
     Open the ```.env``` file:
     ```
@@ -86,15 +64,39 @@
     GRAPH_DB_USER=your_secret_user_name
     GRAPH_DB_PASSWORD=your_secret_password
     ```
+  
+    Configure Max Map Count:
+    ```bash
+    # For 1TB RAM
+    echo "vm.max_map_count=8388608" | sudo tee -a /etc/sysctl.conf
+    
+    # For 1.5TB RAM
+    echo "vm.max_map_count=12582912" | sudo tee -a /etc/sysctl.conf
+    
+    # For 2TB RAM
+    echo "vm.max_map_count=16777216" | sudo tee -a /etc/sysctl.conf
+    
+    # For 2.5TB RAM
+    echo "vm.max_map_count=20971520" | sudo tee -a /etc/sysctl.conf
+    
+    # For 3TB RAM
+    echo "vm.max_map_count=25165824" | sudo tee -a /etc/sysctl.conf
+    
+    # For 3.5TB RAM
+    echo "vm.max_map_count=29360128" | sudo tee -a /etc/sysctl.conf
+    
+    # For 4TB RAM
+    echo "vm.max_map_count=33554432" | sudo tee -a /etc/sysctl.conf
 
+    sudo sysctl -p
+    ```
+  
     Start the Memgraph
     ```
     docker compose up -d memgraph
     ```
   
-- **Running Neo4j**
-
-    Use Neo4j for a less RAM intensive approach to Memgraph.
+- **Running Archive instance of Memgraph**
 
     Open the ```.env``` file:
     ```
@@ -105,11 +107,11 @@
     ```ini
     GRAPH_DB_USER=your_secret_user_name
     GRAPH_DB_PASSWORD=your_secret_password
-    ```
-
+    ``` 
+  
     Start the Memgraph
     ```
-    docker compose up -d neo4j
+    docker compose up -d memgraph-archive
     ```
 
 - **Running Postgres with TimescaleDB extension**
@@ -135,9 +137,9 @@
     docker compose up -d postgres
     ```
 
-- **Running Funds Flow Indexer**
+- **Running Money Flow Indexer**
 
-    Funds Flow Indexing is a slow process which can be accelerated by first generating pickle files for some of the blocks.
+    Money Flow Indexing is a slow process which can be accelerated by first generating pickle files for some of the blocks.
     For recent blocks, pickle files with at least 100000 size help with indexing speed.
     Below is an example procedure which does the following:
      - Generate pickle files for the recent blocks
@@ -167,7 +169,7 @@
 
     In REVERSE ORDER, START_BLOCK should be greater than END_BLOCK. You can specify multiple pickle files separated by comma. 
     ```bash
-    BITCOIN_INDEXER_IN_REVERSE_ORDER=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=0 BITCOIN_V2_TX_OUT_HASHMAP_PICKLES=700000-830000.pkl pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name reverse-indexer
+    BITCOIN_INDEXER_IN_REVERSE_ORDER=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=0 BITCOIN_V2_TX_OUT_HASHMAP_PICKLES=700000-830000.pkl pm2 start ./scripts/run_block_stream.sh --name reverse-indexer
     ```
 
     You can monitor the progress using the following command:
@@ -181,11 +183,6 @@
 
     ```bash
     pm2 delete reverse-indexer
-    ```
-
-    Start the forward indexer. We set END_BLOCK to -1 so that indexer keeps indexing blocks in real-time:
-    ```bash
-    BITCOIN_INDEXER_IN_REVERSE_ORDER=0 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 BITCOIN_INDEXER_END_BLOCK_HEIGHT=-1 pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name forward-indexer
     ```
 
     You can monitor the progress using the following command:
@@ -206,7 +203,7 @@
 
     Start the smart indexer:
     ```bash
-    BITCOIN_INDEXER_SMART_MODE=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 pm2 start ./scripts/run_indexer_bitcoin_funds_flow.sh --name smart-indexer
+    BITCOIN_INDEXER_SMART_MODE=1 BITCOIN_INDEXER_START_BLOCK_HEIGHT=830000 pm2 start ./scripts/run_block_stream.sh --name smart-indexer
     ```
 
     You can monitor the progress using the following command:
@@ -216,7 +213,7 @@
 
 - **Running Balance Tracking Indexer**
 
-    Balance Tracking Indexer also takes long and requires loading pickle files like Funds Flow Indexer.
+    Balance Tracking Indexer also takes long and requires loading pickle files like Money Flow Indexer.
 
     Start the balance tracking indexer:
 

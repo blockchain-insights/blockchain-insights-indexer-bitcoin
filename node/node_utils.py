@@ -185,6 +185,9 @@ class Transaction:
     vins: List["VIN"] = field(default_factory=list)
     vouts: List["VOUT"] = field(default_factory=list)
     is_coinbase: bool = False
+    size: int = 0,
+    vsize: int = 0,
+    weight: int = 0
 
 
 @dataclass
@@ -236,6 +239,9 @@ def parse_block_data(block_data):
                 block_height=block_height,
                 timestamp=tx_timestamp,
                 fee_satoshi=fee_satoshi,
+                size=tx_data.get("size", 0),
+                vsize=tx_data.get("vsize", 0),
+                weight=tx_data.get("weight", 0)
             )
 
             for vin_data in tx_data["vin"]:

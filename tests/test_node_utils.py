@@ -1,5 +1,62 @@
 import unittest
 from node.node import BitcoinNode
+from bitcoin.rpc import Proxy, RawProxy
+import json
+import http.client
+import base64
+
+
+def batch_request(proxy, commands):
+    auth = base64.b64encode(
+        f"{proxy._BaseProxy__url.username}:{proxy._BaseProxy__url.password}".encode()
+    ).decode()
+
+    batch = []
+    for i, cmd in enumerate(commands):
+        method, *params = cmd
+        batch.append({
+            "method": method,
+            "params": params,
+            "jsonrpc": "2.0",
+            "id": i,
+        })
+
+    conn = http.client.HTTPConnection(proxy._BaseProxy__url.hostname, proxy._BaseProxy__url.port)
+    headers = {
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json",
+    }
+
+    conn.request(
+        "POST",
+        "/",
+        json.dumps(batch),
+        headers
+    )
+
+    response = conn.getresponse()
+    result = json.loads(response.read().decode())
+    conn.close()
+
+    for r in result:
+        if "error" in r and r["error"] is not None:
+            raise Exception(f"Error in command {r['id']}: {r['error']}")
+
+    return [r["result"] for r in result]
+
+
+class TestNodeCommandExecution(unittest.TestCase):
+
+    def test_new_lib(self):
+        # Connect to node
+        proxy = Proxy(service_url="http://daxtohujek446464:lubosztezhujek3446457@localhost:8332")
+
+        commands = [
+            ["getrawtransaction", "031a973434d49f03e0761bfcc9bdadd2d24ba9db37c45a6156d454921b65c48d", 1],
+        ]
+        results = batch_request(proxy, commands)
+
+        print(results)
 
 
 class TestNodeUtils(unittest.TestCase):

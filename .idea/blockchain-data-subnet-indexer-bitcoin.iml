@@ -2,7 +2,7 @@
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="Python 3.10.12 WSL (Ubuntu-22.04): (/home/hyperbook/.virtualenvs/blockchain-data-subnet-indexer-bitcoin/bin/python)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.10.12 WSL (Ubuntu): (/home/ubuntu/.virtualenvs/blockchain-insights-indexer-bitcoin/bin/python)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
