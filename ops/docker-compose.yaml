@@ -6,7 +6,7 @@ services:
     command:
       -rpcuser=${BITCOIN_NODE_RPC_USER}
       -rpcpassword=${BITCOIN_NODE_RPC_PASSWORD}
-      -rpcallowip=${BITCOIN_NODE_RPC_ALLOW_IP:-172.16.0.0/12}
+      -rpcallowip=${BITCOIN_NODE_RPC_ALLOW_IP:-0.0.0.0/0}
       -rpcbind=${BITCOIN_NODE_RPC_BIND:-0.0.0.0}
       -maxconnections=${BITCOIN_NODE_MAX_CONNECTIONS:-512}
       -printtoconsole
