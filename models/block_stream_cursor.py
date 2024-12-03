@@ -1,6 +1,5 @@
 from datetime import datetime
 from typing import Optional
-
 from loguru import logger
 from sqlalchemy import Column, String, Integer, PrimaryKeyConstraint, DateTime, create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
