@@ -53,7 +53,8 @@ class BlockStreamProducer:
         self.bitcoin_node = bitcoin_node
 
         self.topic_name = BLOCK_STREAM_TOPIC_NAME
-        self.partitioner = BlockRangePartitioner()
+        self.num_partitions = 39
+        self.partitioner = BlockRangePartitioner(self.num_partitions)
 
         self.admin_client = AdminClient(kafka_config)
         self.ensure_topic_exists()
