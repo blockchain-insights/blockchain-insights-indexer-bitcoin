@@ -2,16 +2,16 @@ import os
 import sys
 import signal
 import threading
-from collections import defaultdict
-from datetime import datetime
-from typing import Dict, Any, Optional
-import json
 from loguru import logger
-from confluent_kafka import Consumer, TopicPartition
 from models import BLOCK_STREAM_TOPIC_NAME
 from models.balance_tracking import CONSUMER_NAME
 from models.balance_tracking.transaction_indexer import TransactionIndexer
 from models.block_stream_cursor import BlockStreamCursorManager
+from typing import Dict, Any, Optional
+from confluent_kafka import Consumer, TopicPartition
+from datetime import datetime
+from collections import defaultdict
+import json
 
 
 class BlockStreamConsumer:
@@ -26,61 +26,92 @@ class BlockStreamConsumer:
         self.transaction_indexer = transaction_indexer
         self.terminate_event = terminate_event
 
-        # Track partition completion status
-        self.partition_message_counts = defaultdict(int)
-        self.MAX_MESSAGES_PER_PARTITION = 52560
+        self.BLOCKS_PER_YEAR = 52560
         self.current_partition: Optional[int] = None
+        self.last_processed_block = defaultdict(int)
+
+    def get_partition_range(self, partition: int) -> tuple[int, int]:
+        """Get the expected block height range for a partition"""
+        start = partition * self.BLOCKS_PER_YEAR
+        end = (partition + 1) * self.BLOCKS_PER_YEAR - 1
+        return (start, end)
 
     def initialize_partition_state(self, partition: int) -> int:
+        """Initialize partition state and return starting offset"""
         cursor = self.block_stream_cursor_manager.get_cursor(CONSUMER_NAME, partition)
         if cursor is None:
-            self.partition_message_counts[partition] = 0
             return 0
-        else:
-            self.partition_message_counts[partition] = cursor.offset + 1
-            return cursor.offset + 1
+        return cursor.offset + 1
 
     def on_assign(self, consumer, partitions):
         sorted_partitions = sorted(partitions, key=lambda p: p.partition)
+
         for partition in sorted_partitions:
             starting_offset = self.initialize_partition_state(partition.partition)
             partition.offset = starting_offset
 
-        incomplete_partitions = [p.partition for p in sorted_partitions
-                                 if self.partition_message_counts[p.partition] < self.MAX_MESSAGES_PER_PARTITION]
+            start_block, end_block = self.get_partition_range(partition.partition)
+            logger.info("Partition range",
+                        partition=partition.partition,
+                        start_block=start_block,
+                        end_block=end_block)
 
-        if incomplete_partitions:
-            self.current_partition = min(incomplete_partitions)
-            current_partitions = [p for p in sorted_partitions if p.partition == self.current_partition]
-            consumer.assign(current_partitions)
+        if not self.current_partition:
+            if sorted_partitions:
+                self.current_partition = sorted_partitions[0].partition
+                consumer.assign([sorted_partitions[0]])
+                logger.info("Starting consumption",
+                            partition=self.current_partition,
+                            starting_offset=sorted_partitions[0].offset)
+                return
 
-            logger.info("Starting consumption",
-                        partition=self.current_partition,
-                        starting_offset=self.partition_message_counts[self.current_partition],
-                        max_messages=self.MAX_MESSAGES_PER_PARTITION)
-        else:
-            logger.info("No incomplete partitions found")
-            consumer.assign([])
+        logger.info("No partitions ready for processing")
+        consumer.assign([])
+
+    def check_next_partition(self, next_partition: int) -> bool:
+        """Check if next partition has any messages"""
+        tp = TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, 0)
+        # Get watermark offsets to check if partition has any messages
+        low, high = self.consumer.get_watermark_offsets(tp)
+        return high > 0
 
     def run(self):
-        self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
+        try:
+            self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
 
-        while not self.terminate_event.is_set():
-            message = self.consumer.poll(timeout=1.0)
+            consecutive_empty_polls = 0
 
-            if message is None:
-                continue
+            while not self.terminate_event.is_set():
+                message = self.consumer.poll(timeout=1.0)
 
-            if message.error():
-                logger.error("Consumer error", error=message.error())
-                break
+                if message is None:
+                    consecutive_empty_polls += 1
 
-            if message.partition() == self.current_partition:
-                self.process_message(message)
-                if self.partition_message_counts[self.current_partition] >= self.MAX_MESSAGES_PER_PARTITION:
-                    self.move_to_next_partition()
+                    # If we've processed messages in this partition and got several empty polls
+                    if consecutive_empty_polls >= 3 and self.last_processed_block[self.current_partition] > 0:
+                        # Check if we're at partition boundary
+                        _, end_block = self.get_partition_range(self.current_partition)
+                        if self.last_processed_block[self.current_partition] >= end_block:
+                            # Check next partition
+                            next_partition = self.current_partition + 1
+                            if self.check_next_partition(next_partition):
+                                self.move_to_next_partition(next_partition)
+                    continue
 
-        self.consumer.close()
+                consecutive_empty_polls = 0
+
+                if message.error():
+                    logger.error("Consumer error", error=message.error())
+                    break
+
+                if message.partition() == self.current_partition:
+                    self.process_message(message)
+
+        except Exception as e:
+            logger.error("Fatal error in consumer run loop", error=str(e))
+            raise
+        finally:
+            self.consumer.close()
 
     def process_message(self, message):
         partition = message.partition()
@@ -88,6 +119,7 @@ class BlockStreamConsumer:
 
         try:
             transaction = json.loads(message.value())
+            block_height = transaction["block_height"]
 
             self.transaction_indexer.index_transaction(tx=transaction)
             self.consumer.commit(message)
@@ -98,7 +130,13 @@ class BlockStreamConsumer:
                 datetime.now()
             )
 
-            logger.info("Processed transaction", block_height=transaction["block_height"], tx_id=transaction["tx_id"], partition=partition, offset=offset)
+            self.last_processed_block[partition] = block_height
+
+            logger.info("Processed transaction",
+                        block_height=block_height,
+                        tx_id=transaction["tx_id"],
+                        partition=partition,
+                        offset=offset)
 
         except Exception as e:
             logger.error(
@@ -108,31 +146,25 @@ class BlockStreamConsumer:
                 offset=offset
             )
 
-    def move_to_next_partition(self):
+    def move_to_next_partition(self, next_partition: int):
         try:
-            incomplete_partitions = [p for p, count in self.partition_message_counts.items()
-                                     if count < self.MAX_MESSAGES_PER_PARTITION]
-
             current_partition = self.current_partition
+            self.current_partition = next_partition
+            starting_offset = self.initialize_partition_state(next_partition)
+            new_assignment = [TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, starting_offset)]
+            self.consumer.assign(new_assignment)
 
-            if incomplete_partitions:
-                next_partition = min(p for p in incomplete_partitions if p > self.current_partition)
-                self.current_partition = next_partition
-                starting_offset = self.initialize_partition_state(next_partition)
-                new_assignment = [TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, starting_offset)]
-                self.consumer.assign(new_assignment)
-                logger.info("Moving to next partition",
-                            previous_partition=current_partition,
-                            next_partition=next_partition,
-                            starting_offset=starting_offset,
-                            remaining_partitions=len(incomplete_partitions) - 1)
-            else:
-                logger.info("All partitions completed", final_partition=current_partition)
-                self.current_partition = None
-                self.consumer.assign([])
+            start_block, end_block = self.get_partition_range(next_partition)
+            logger.info("Moving to next partition",
+                        previous_partition=current_partition,
+                        next_partition=next_partition,
+                        starting_offset=starting_offset,
+                        expected_block_range=(start_block, end_block))
 
         except Exception as e:
-            logger.error("Error moving to next partition", current_partition=current_partition, error=str(e))
+            logger.error("Error moving to next partition",
+                         current_partition=current_partition,
+                         error=str(e))
             raise
 
 if __name__ == "__main__":
