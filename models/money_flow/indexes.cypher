@@ -1,4 +1,3 @@
-CREATE INDEX ON :Cache;
 CREATE INDEX ON :Transaction;
 CREATE INDEX ON :Transaction(tx_id);
 CREATE INDEX ON :Transaction(block_height);

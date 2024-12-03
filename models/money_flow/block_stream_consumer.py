@@ -29,17 +29,67 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
         with self.graph_database.session() as session:
             try:
                 with session.begin_transaction() as tx_context:
+                    # Convert inputs and outputs to lists of parameters
+                    vin_params = [
+                        {
+                            "address": vin["address"],
+                            "amount": vin["amount"]
+                        } for vin in tx["vins"]
+                    ]
 
+                    vout_params = [
+                        {
+                            "address": vout["address"],
+                            "amount": vout["amount"]
+                        } for vout in tx["vouts"]
+                    ]
+
+                    # Create all direct transfer relationships
+                    direct_transfers = [
+                        {
+                            "from_address": vin["address"],
+                            "to_address": vout["address"],
+                            "amount": vout["amount"],
+                            "block_height": tx["block_height"]
+                        }
+                        for vin in tx["vins"]
+                        for vout in tx["vouts"]
+                    ]
+
+                    # Single query that handles everything
                     tx_context.run(
                         query="""
                         MERGE (t:Transaction {
-                            tx_id: $tx_id,
-                            timestamp: $timestamp,
-                            block_height: $block_height,
-                            is_coinbase: $is_coinbase,
-                            in_total_amount: $in_total_amount,
-                            out_total_amount: $out_total_amount
+                            tx_id: $tx_id
                         })
+                        SET t.timestamp = $timestamp,
+                            t.block_height = $block_height,
+                            t.is_coinbase = $is_coinbase,
+                            t.in_total_amount = $in_total_amount,
+                            t.out_total_amount = $out_total_amount
+
+                        WITH t
+                        UNWIND $vin_params AS vin
+                        MERGE (input_addr:Address {address: vin.address})
+                        MERGE (input_addr)-[r1:SENT {
+                            amount: vin.amount
+                        }]->(t)
+
+                        WITH t
+                        UNWIND $vout_params AS vout
+                        MERGE (output_addr:Address {address: vout.address})
+                        MERGE (t)-[r2:SENT {
+                            amount: vout.amount
+                        }]->(output_addr)
+
+                        WITH t
+                        UNWIND $direct_transfers AS transfer
+                        MATCH (from:Address {address: transfer.from_address})
+                        MATCH (to:Address {address: transfer.to_address})
+                        MERGE (from)-[r3:SENT {
+                            amount: transfer.amount,
+                            block_height: transfer.block_height
+                        }]->(to)
                         """,
                         parameters={
                             "tx_id": tx["tx_id"],
@@ -47,77 +97,12 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                             "block_height": tx["block_height"],
                             "is_coinbase": tx["is_coinbase"],
                             "in_total_amount": tx["in_total_amount"],
-                            "out_total_amount": tx["out_total_amount"]
+                            "out_total_amount": tx["out_total_amount"],
+                            "vin_params": vin_params,
+                            "vout_params": vout_params,
+                            "direct_transfers": direct_transfers
                         }
                     )
-
-                    # Create Address nodes and relationships for inputs (vins)
-                    for vin in tx["vins"]:
-                        # Create source Address node
-                        tx_context.run(
-                            query="MERGE (a:Address {address: $address})",
-                            parameters={"address": vin["address"]}
-                        )
-
-                        # Create relationship from Address to Transaction
-                        tx_context.run(
-                            query="""
-                            MATCH (a:Address {address: $address})
-                            MATCH (t:Transaction {tx_id: $tx_id})
-                            MERGE (a)-[r:SENT {
-                                amount: $amount
-                            }]->(t)
-                            """,
-                            parameters={
-                                "address": vin["address"],
-                                "tx_id": tx["tx_id"],
-                                "amount": vin["amount"]
-                            }
-                        )
-
-                    # Create Address nodes and relationships for outputs (vouts)
-                    for vout in tx["vouts"]:
-                        # Create destination Address node
-                        tx_context.run(
-                            query="MERGE (a:Address {address: $address})",
-                            parameters={"address": vout["address"]}
-                        )
-
-                        # Create relationship from Transaction to Address
-                        tx_context.run(
-                            query="""
-                            MATCH (t:Transaction {tx_id: $tx_id})
-                            MATCH (a:Address {address: $address})
-                            MERGE (t)-[r:SENT {
-                                amount: $amount
-                            }]->(a)
-                            """,
-                            parameters={
-                                "tx_id": tx["tx_id"],
-                                "address": vout["address"],
-                                "amount": vout["amount"]
-                            }
-                        )
-
-                    # Create direct Address-to-Address relationships
-                    for vin in tx["vins"]:
-                        for vout in tx["vouts"]:
-                            tx_context.run(
-                                query="""
-                                MATCH (from:Address {address: $from_address})
-                                MATCH (to:Address {address: $to_address})
-                                MERGE (from)-[r:SENT {
-                                    amount: $amount,
-                                    block_height: $block_height
-                                }]->(to)
-                                """,
-                                parameters={
-                                    "from_address": vin["address"],
-                                    "to_address": vout["address"],
-                                    "amount": vout["amount"],
-                                    "block_height": tx["block_height"]
-                                }
-                            )
 
             except Exception as e:
                 logger.error(f"Error indexing transaction: {e}")
