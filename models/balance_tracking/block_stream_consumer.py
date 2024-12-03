@@ -150,11 +150,3 @@ if __name__ == "__main__":
     finally:
         block_stream_cursor_manager.close()
         logger.info("Balance indexer consumer stopped")
-
-        # TESTING:
-        # TODO: investigate 0 fee transfers... in early blocks they are present, but not in later blocks .. but i need to check if my system works correctly
-
-        # BTC FULL NODE UPGRADE:
-        # TODO: investigate https://bitcoincore.org/en/releases/28.0/
-        # check if we can get spent utxo in a faster way?
-
