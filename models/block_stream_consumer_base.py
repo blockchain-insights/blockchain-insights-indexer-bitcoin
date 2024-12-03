@@ -1,11 +1,6 @@
-import os
-import sys
-import signal
-import threading
 from loguru import logger
 from models import BLOCK_STREAM_TOPIC_NAME
 from models.balance_tracking import CONSUMER_NAME
-from models.balance_tracking.transaction_indexer import TransactionIndexer
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any, Optional
 from confluent_kafka import Consumer, TopicPartition
@@ -171,75 +166,3 @@ class BlockStreamConsumerBase:
 
     def index_transaction(self, tx):
         pass
-
-
-if __name__ == "__main__":
-    terminate_event = threading.Event()
-
-    def shutdown_handler(signum, frame):
-        logger.info(
-            "Shutdown signal received. Waiting for current processing to complete."
-        )
-        terminate_event.set()
-
-
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
-
-
-    def patch_record(record):
-        record["extra"]["service"] = 'balance-tracking-consumer'
-        return True
-
-
-    logger.remove()
-    logger.add(
-        sys.stdout,
-        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | <blue>{message}</blue> | {extra}",
-        level="DEBUG",
-        filter=patch_record,
-    )
-
-    logger.add(
-        "logs/balance-tracking-consumer.log",
-        rotation="500 MB",
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
-        level="DEBUG",
-        filter=patch_record
-    )
-
-    db_url = os.getenv(
-        "REDPANDA_DB_CONNECTION_STRING",
-        "postgresql://postgres:changeit456$@localhost:5420/block_stream"
-    )
-    redpanda_bootstrap_servers = os.getenv(
-        "REDPANDA_BOOTSTRAP_SERVERS",
-        "localhost:19092"
-    )
-
-    block_stream_cursor_manager = BlockStreamCursorManager(db_url)
-
-    timeseries_db_url = os.getenv("TIMESERIES_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5432/timeseries")
-    transaction_indexer = TransactionIndexer(timeseries_db_url)
-
-    kafka_config = {
-        'bootstrap.servers': redpanda_bootstrap_servers,
-        'group.id': 'transaction-consumer',
-        'auto.offset.reset': 'earliest',
-        'enable.auto.commit': False,
-        'isolation.level': 'read_committed'
-    }
-
-    try:
-        consumer = BlockStreamConsumer(
-            kafka_config,
-            block_stream_cursor_manager,
-            transaction_indexer,
-            terminate_event
-        )
-        consumer.run()
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-    finally:
-        block_stream_cursor_manager.close()
-        logger.info("Balance indexer consumer stopped")

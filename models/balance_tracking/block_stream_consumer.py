@@ -2,6 +2,8 @@ import os
 import sys
 import signal
 import threading
+
+from dotenv import load_dotenv
 from loguru import logger
 from models.balance_tracking.transaction_indexer import TransactionIndexer
 from models.block_stream_consumer_base import BlockStreamConsumerBase
@@ -31,6 +33,8 @@ if __name__ == "__main__":
         )
         terminate_event.set()
 
+
+    load_dotenv()
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
