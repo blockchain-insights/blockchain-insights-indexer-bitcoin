@@ -15,7 +15,7 @@ class BlockStreamCursor(Base):
     timestamp = Column(DateTime, nullable=False)
 
     __table_args__ = (
-        PrimaryKeyConstraint('consumer_name'),
+        PrimaryKeyConstraint('consumer_name', 'partition'),
     )
 
 
