@@ -1,16 +1,12 @@
-import json
+import argparse
 import os
 import sys
 import signal
 import threading
-from sre_constants import error
-
-import mgp
 from dotenv import load_dotenv
 from loguru import logger
 from neo4j import Driver, GraphDatabase
 from typing_extensions import LiteralString
-
 from models.block_stream_consumer_base import BlockStreamConsumerBase
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any
@@ -92,12 +88,23 @@ if __name__ == "__main__":
 
     load_dotenv()
 
+    parser = argparse.ArgumentParser(description='Process archive mode settings.')
+    parser.add_argument(
+        '--archive',
+        action='store_true',
+        help='Run in archive mode'
+    )
+    args = parser.parse_args()
+    archive = args.archive
+
+    service_name = 'money-flow-archive-consumer' if archive else 'money-flow-consumer'
+
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
 
     def patch_record(record):
-        record["extra"]["service"] = 'money-flow-consumer'
+        record["extra"]["service"] = service_name
         return True
 
     logger.remove()
@@ -109,7 +116,7 @@ if __name__ == "__main__":
     )
 
     logger.add(
-        "logs/money-flow-consumer.log",
+        f"logs/{service_name}.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",
@@ -125,23 +132,23 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
-    block_stream_cursor_manager = BlockStreamCursorManager(db_url)
+    block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
-        'group.id': 'money-flow-consumer',
+        'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
         'isolation.level': 'read_committed'
     }
 
     graph_db_url = os.getenv(
-        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL",
+        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL" if archive else "MONEY_FLOW_MEMGRAPH_URL",
         "bolt://localhost:7688"
     )
 
-    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER", "neo4j")
-    graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD", "neo4j")
+    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else  "MONEY_FLOW_MEMGRAPH_USER", "memgraph")
+    graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if archive else "MONEY_FLOW_MEMGRAPH_PASSWORD", "memgraph")
 
     graph_database = GraphDatabase.driver(
         graph_db_url,
@@ -162,4 +169,5 @@ if __name__ == "__main__":
         logger.error(f"Fatal error: {e}")
     finally:
         block_stream_cursor_manager.close()
+        graph_database.close()
         logger.info("Balance indexer consumer stopped")

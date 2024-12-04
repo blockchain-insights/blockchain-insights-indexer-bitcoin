@@ -19,9 +19,10 @@ class BlockStreamCursor(Base):
 
 
 class BlockStreamCursorManager:
-    def __init__(self, db_url: str):
+    def __init__(self, consumer_name: str, db_url: str):
         self.engine = create_engine(db_url)
         self.Session = sessionmaker(bind=self.engine)
+        self.consumer_name = consumer_name
 
         # Ensure tables exist
         Base.metadata.create_all(self.engine)
@@ -29,7 +30,7 @@ class BlockStreamCursorManager:
     def close(self):
         self.engine.dispose()
 
-    def get_cursor(self, consumer_name: str, partition: int) -> Optional[BlockStreamCursor]:
+    def get_cursor(self, partition: int) -> Optional[BlockStreamCursor]:
         """
         Get cursor for specified consumer and partition.
         Returns None if no cursor exists.
@@ -37,7 +38,7 @@ class BlockStreamCursorManager:
         try:
             with self.Session() as session:
                 cursor = session.query(BlockStreamCursor).filter(
-                    BlockStreamCursor.consumer_name == consumer_name,
+                    BlockStreamCursor.consumer_name == self.consumer_name,
                     BlockStreamCursor.partition == partition
                 ).first()
                 return cursor
@@ -45,14 +46,14 @@ class BlockStreamCursorManager:
             logger.error(
                 "Failed to get cursor",
                 extra={
-                    "consumer_name": consumer_name,
+                    "consumer_name": self.consumer_name,
                     "partition": partition,
                     "error": str(e)
                 }
             )
             raise
 
-    def set_cursor(self, consumer_name: str, partition: int, offset: int, timestamp: datetime) -> None:
+    def set_cursor(self, partition: int, offset: int, timestamp: datetime) -> None:
         """Set cursor position for consumer."""
         try:
             with self.Session() as session:
@@ -72,7 +73,7 @@ class BlockStreamCursorManager:
                             WHERE NOT EXISTS (SELECT * FROM upsert)
                         """),
                         {
-                            'consumer_name': consumer_name,
+                            'consumer_name': self.consumer_name,
                             'partition': partition,
                             'offset': offset,
                             'timestamp': timestamp

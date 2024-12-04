@@ -1,16 +1,12 @@
-import traceback
-
 from loguru import logger
-from sqlalchemy import Boolean
-
 from models import BLOCK_STREAM_TOPIC_NAME
-from models.balance_tracking import CONSUMER_NAME
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any, Optional
 from confluent_kafka import Consumer, TopicPartition
 from datetime import datetime
 from collections import defaultdict
 import json
+import traceback
 
 
 class BlockStreamConsumerBase:
@@ -27,7 +23,6 @@ class BlockStreamConsumerBase:
         self.last_processed_block = defaultdict(int)
 
         self.BLOCKS_PER_YEAR = 52560
-        self.CONSUMER_NAME = None
 
     def get_partition_range(self, partition: int) -> tuple[int, int]:
         start = partition * self.BLOCKS_PER_YEAR
@@ -35,7 +30,7 @@ class BlockStreamConsumerBase:
         return start, end
 
     def initialize_partition_state(self, partition: int) -> int:
-        cursor = self.block_stream_cursor_manager.get_cursor(self.CONSUMER_NAME, partition)
+        cursor = self.block_stream_cursor_manager.get_cursor(partition)
         if cursor is None:
             return 0
         return cursor.offset + 1
@@ -126,7 +121,6 @@ class BlockStreamConsumerBase:
             self.index_transaction(tx=transaction)
             self.consumer.commit(message)
             self.block_stream_cursor_manager.set_cursor(
-                CONSUMER_NAME,
                 partition,
                 offset,
                 datetime.now()

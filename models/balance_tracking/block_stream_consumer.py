@@ -2,7 +2,6 @@ import os
 import sys
 import signal
 import threading
-
 from dotenv import load_dotenv
 from loguru import logger
 from models.balance_tracking.transaction_indexer import TransactionIndexer
@@ -19,10 +18,10 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                  terminate_event):
         super().__init__(kafka_config, block_stream_cursor_manager, terminate_event)
         self.transaction_indexer = transaction_indexer
-        self.CONSUMER_NAME = 'balance-tracking-consumer'
 
     def index_transaction(self, tx):
         self.transaction_indexer.index_transaction(tx)
+
 
 if __name__ == "__main__":
     terminate_event = threading.Event()
@@ -36,12 +35,14 @@ if __name__ == "__main__":
 
     load_dotenv()
 
+    service_name = 'transaction-consumer'
+
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
 
     def patch_record(record):
-        record["extra"]["service"] = 'balance-tracking-consumer'
+        record["extra"]["service"] = service_name
         return True
 
 
@@ -54,7 +55,7 @@ if __name__ == "__main__":
     )
 
     logger.add(
-        "logs/balance-tracking-consumer.log",
+        f"logs/{service_name}.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",
@@ -70,14 +71,14 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
-    block_stream_cursor_manager = BlockStreamCursorManager(db_url)
+    block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
     timeseries_db_url = os.getenv("TIMESERIES_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5432/timeseries")
     transaction_indexer = TransactionIndexer(timeseries_db_url)
 
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
-        'group.id': 'transaction-consumer',
+        'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
         'isolation.level': 'read_committed'
