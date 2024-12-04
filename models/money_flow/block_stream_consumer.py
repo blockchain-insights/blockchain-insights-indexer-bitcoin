@@ -95,15 +95,9 @@ if __name__ == "__main__":
         action='store_true',
         help='Run in archive mode'
     )
-    parser.add_argument(
-        '--partition',
-        type=int,
-        default=2,
-        help='Partition to start from'
-    )
+
     args = parser.parse_args()
     archive = args.archive
-    partition = args.partition
 
     service_name = 'money-flow-archive-consumer' if archive else 'money-flow-consumer'
 
@@ -140,6 +134,8 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
+    partition_start = os.getenv("MONEY_FLOW_PARTITION_START", 13)
+
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
     kafka_config = {
@@ -171,7 +167,7 @@ if __name__ == "__main__":
             block_stream_cursor_manager,
             graph_database,
             terminate_event,
-            partition
+            partition_start
         )
         consumer.run()
     except Exception as e:
