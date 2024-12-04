@@ -1,3 +1,5 @@
+import traceback
+
 from loguru import logger
 from sqlalchemy import Boolean
 
@@ -143,6 +145,7 @@ class BlockStreamConsumerBase:
             logger.error(
                 "Error processing message",
                 error=str(e),
+                tbl=traceback.format_exc(),
                 partition=partition,
                 offset=offset
             )
@@ -166,6 +169,7 @@ class BlockStreamConsumerBase:
         except Exception as e:
             logger.error("Error moving to next partition",
                          current_partition=current_partition,
+                         tbl=traceback.format_exc(),
                          error=str(e))
             raise e
 

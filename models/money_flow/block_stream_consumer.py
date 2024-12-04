@@ -29,93 +29,53 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
         self.CONSUMER_NAME = 'money-flow-consumer'
 
     def index_transaction(self, tx):
+
+        query: LiteralString = """
+            MERGE (t:Transaction {tx_id: $tx_id})
+            ON CREATE SET 
+                t.timestamp = $timestamp,
+                t.block_height = $block_height,
+                t.is_coinbase = $is_coinbase,
+                t.in_total_amount = $in_total_amount,
+                t.out_total_amount = $out_total_amount
+
+            WITH t
+            UNWIND $vins as vin
+            MERGE (a1:Address {address: vin.address})
+            WITH t, vin, a1
+            WITH t, collect({n: a1, data: vin}) as inputs
+
+            WITH t, inputs
+            UNWIND $vouts as vout
+            MERGE (a2:Address {address: vout.address})
+            WITH t, inputs, vout, a2
+            WITH t, inputs, collect({n: a2, data: vout}) as outputs
+
+            UNWIND inputs as input
+            UNWIND outputs as output
+            WITH t, input['n'] as from_addr, output['n'] as to_addr, input['data'] as vin_data, output['data'] as vout_data
+            MERGE (from_addr)-[:SENT {amount: vin_data.amount}]->(t)
+            MERGE (t)-[:SENT {amount: vout_data.amount}]->(to_addr)
+            MERGE (from_addr)-[:SENT {
+                amount: vout_data.amount,
+                block_height: $block_height
+            }]->(to_addr)
+            """
+
         with self.graph_database.session() as session:
             try:
-                with session.begin_transaction() as tx_context:
-                    tx_context.run(
-                        query="""
-                         MERGE (t:Transaction {tx_id: $tx_id})
-                         ON CREATE SET t.timestamp = $timestamp,
-                                       t.block_height = $block_height,
-                                       t.is_coinbase = $is_coinbase,
-                                       t.in_total_amount = $in_total_amount,
-                                       t.out_total_amount = $out_total_amount
-                         """,
-                        parameters={
+                session.run(query, parameters={
                             "tx_id": tx["tx_id"],
                             "timestamp": tx["timestamp"],
                             "block_height": tx["block_height"],
                             "is_coinbase": tx["is_coinbase"],
                             "in_total_amount": tx["in_total_amount"],
-                            "out_total_amount": tx["out_total_amount"]
-                        }
-                    )
-                    # Create Address nodes and relationships for inputs (vins)
-                    for vin in tx["vins"]:
-                        # Create source Address node
-                        tx_context.run(
-                            query="MERGE (a:Address {address: $address})",
-                            parameters={"address": vin["address"]}
-                        )
-                        # Create relationship from Address to Transaction
-                        tx_context.run(
-                            query="""
-                            MATCH (a:Address {address: $address})
-                            MATCH (t:Transaction {tx_id: $tx_id})
-                            MERGE (a)-[r:SENT {
-                                amount: $amount
-                            }]->(t)
-                            """,
-                            parameters={
-                                "address": vin["address"],
-                                "tx_id": tx["tx_id"],
-                                "amount": vin["amount"]
-                            }
-                        )
-                    # Create Address nodes and relationships for outputs (vouts)
-                    for vout in tx["vouts"]:
-                        # Create destination Address node
-                        tx_context.run(
-                            query="MERGE (a:Address {address: $address})",
-                            parameters={"address": vout["address"]}
-                        )
-                        # Create relationship from Transaction to Address
-                        tx_context.run(
-                            query="""
-                            MATCH (t:Transaction {tx_id: $tx_id})
-                            MATCH (a:Address {address: $address})
-                            MERGE (t)-[r:SENT {
-                                amount: $amount
-                            }]->(a)
-                            """,
-                            parameters={
-                                "tx_id": tx["tx_id"],
-                                "address": vout["address"],
-                                "amount": vout["amount"]
-                            }
-                        )
-                    # Create direct Address-to-Address relationships
-                    for vin in tx["vins"]:
-                        for vout in tx["vouts"]:
-                            tx_context.run(
-                                query="""
-                                MATCH (from:Address {address: $from_address})
-                                MATCH (to:Address {address: $to_address})
-                                MERGE (from)-[r:SENT {
-                                    amount: $amount,
-                                    block_height: $block_height
-                                }]->(to)
-                                """,
-                                parameters={
-                                    "from_address": vin["address"],
-                                    "to_address": vout["address"],
-                                    "amount": vout["amount"],
-                                    "block_height": tx["block_height"]
-                                }
-                            )
-                        tx_context.commit()
+                            "out_total_amount": tx["out_total_amount"],
+                            "vins": tx["vins"],
+                            "vouts": tx["vouts"]
+                        })
+
             except Exception as e:
-                tx_context.rollback()
                 logger.error(f"Error indexing transaction: {e}")
                 raise e
 
