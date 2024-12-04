@@ -13,7 +13,8 @@ class BlockStreamConsumerBase:
     def __init__(self,
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
-                 terminate_event):
+                 terminate_event,
+                 start_partition: int):
 
         self.consumer = Consumer(kafka_config)
         self.block_stream_cursor_manager = block_stream_cursor_manager
@@ -23,6 +24,7 @@ class BlockStreamConsumerBase:
         self.last_processed_block = defaultdict(int)
 
         self.BLOCKS_PER_YEAR = 52560
+        self.start_partition = start_partition
 
     def get_partition_range(self, partition: int) -> tuple[int, int]:
         start = partition * self.BLOCKS_PER_YEAR
@@ -58,7 +60,7 @@ class BlockStreamConsumerBase:
             if active_partitions:
                 self.current_partition = max(active_partitions, key=lambda x: x[0])[0]
             else:
-                self.current_partition = sorted_partitions[0].partition
+                self.current_partition = sorted_partitions[self.start_partition].partition
 
             current_partition = next(p for p in sorted_partitions
                                      if p.partition == self.current_partition)

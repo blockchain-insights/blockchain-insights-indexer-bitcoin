@@ -16,7 +16,7 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  transaction_indexer: TransactionIndexer,
                  terminate_event):
-        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event)
+        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event, 0)
         self.transaction_indexer = transaction_indexer
 
     def index_transaction(self, tx):

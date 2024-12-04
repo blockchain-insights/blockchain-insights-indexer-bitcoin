@@ -17,9 +17,10 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  graph_database: Driver,
-                 terminate_event):
+                 terminate_event,
+                 partition):
 
-        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event)
+        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event, partition)
 
         self.graph_database = graph_database
         self.CONSUMER_NAME = 'money-flow-consumer'
@@ -94,8 +95,15 @@ if __name__ == "__main__":
         action='store_true',
         help='Run in archive mode'
     )
+    parser.add_argument(
+        '--partition',
+        type=int,
+        default=2,
+        help='Partition to start from'
+    )
     args = parser.parse_args()
     archive = args.archive
+    partition = args.partition
 
     service_name = 'money-flow-archive-consumer' if archive else 'money-flow-consumer'
 
@@ -147,7 +155,7 @@ if __name__ == "__main__":
         "bolt://localhost:7688"
     )
 
-    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else  "MONEY_FLOW_MEMGRAPH_USER", "memgraph")
+    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else "MONEY_FLOW_MEMGRAPH_USER", "memgraph")
     graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if archive else "MONEY_FLOW_MEMGRAPH_PASSWORD", "memgraph")
 
     graph_database = GraphDatabase.driver(
@@ -162,7 +170,8 @@ if __name__ == "__main__":
             kafka_config,
             block_stream_cursor_manager,
             graph_database,
-            terminate_event
+            terminate_event,
+            partition
         )
         consumer.run()
     except Exception as e:
@@ -171,3 +180,4 @@ if __name__ == "__main__":
         block_stream_cursor_manager.close()
         graph_database.close()
         logger.info("Balance indexer consumer stopped")
+
