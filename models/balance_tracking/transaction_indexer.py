@@ -12,7 +12,7 @@ class TransactionIndexer:
         engine = create_engine(db_url)
         self.SessionFactory = sessionmaker(bind=engine)
 
-    def index_transaction(self, tx: Dict[str, Any]) -> None:
+    def index_transaction(self, tx: Dict[str, Any]):
         with self.SessionFactory() as session:
             try:
                 tx["timestamp"] = datetime.fromtimestamp(tx["timestamp"]).isoformat()
@@ -82,5 +82,5 @@ class TransactionIndexer:
             except Exception as e:
                 session.rollback()
                 logger.error(f"Failed to index transaction {tx['tx_id']}", error=str(e))
-                raise
+                raise e
 

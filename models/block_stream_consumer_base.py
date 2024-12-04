@@ -1,4 +1,6 @@
 from loguru import logger
+from sqlalchemy import Boolean
+
 from models import BLOCK_STREAM_TOPIC_NAME
 from models.balance_tracking import CONSUMER_NAME
 from models.block_stream_cursor import BlockStreamCursorManager
@@ -102,7 +104,8 @@ class BlockStreamConsumerBase:
                     break
 
                 if message.partition() == self.current_partition:
-                    self.process_message(message)
+                    if not self.process_message(message):
+                        break
 
         except Exception as e:
             logger.error("Fatal error in consumer run loop", error=str(e))
@@ -135,6 +138,7 @@ class BlockStreamConsumerBase:
                         partition=partition,
                         offset=offset)
 
+            return True
         except Exception as e:
             logger.error(
                 "Error processing message",
@@ -142,6 +146,7 @@ class BlockStreamConsumerBase:
                 partition=partition,
                 offset=offset
             )
+            return False
 
     def move_to_next_partition(self, next_partition: int):
         try:
@@ -162,7 +167,7 @@ class BlockStreamConsumerBase:
             logger.error("Error moving to next partition",
                          current_partition=current_partition,
                          error=str(e))
-            raise
+            raise e
 
     def index_transaction(self, tx):
-        pass
+       pass
