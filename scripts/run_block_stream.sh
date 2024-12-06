@@ -1,4 +1,4 @@
 #!/bin/bash
 cd "$(dirname "$0")/../"
 export PYTHONPATH=$(pwd)
-python3 models/money_flow/block_stream.py
+python3 models/block_stream.py
