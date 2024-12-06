@@ -32,9 +32,7 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
             ON CREATE SET 
                 t.timestamp = $timestamp,
                 t.block_height = $block_height,
-                t.is_coinbase = $is_coinbase,
-                t.in_total_amount = $in_total_amount,
-                t.out_total_amount = $out_total_amount
+                t.is_coinbase = $is_coinbase
 
             WITH t
             UNWIND $vins as vin
@@ -66,8 +64,6 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                             "timestamp": tx["timestamp"],
                             "block_height": tx["block_height"],
                             "is_coinbase": tx["is_coinbase"],
-                            "in_total_amount": tx["in_total_amount"],
-                            "out_total_amount": tx["out_total_amount"],
                             "vins": tx["vins"],
                             "vouts": tx["vouts"]
                         })
