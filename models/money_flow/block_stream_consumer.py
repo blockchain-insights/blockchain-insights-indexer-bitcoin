@@ -143,7 +143,7 @@ if __name__ == "__main__":
     }
 
     graph_db_url = os.getenv(
-        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL" if archive else "MONEY_FLOW_MEMGRAPH_URL",
+        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_URL",
         "bolt://localhost:7688"
     )
 
