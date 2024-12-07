@@ -147,8 +147,8 @@ if __name__ == "__main__":
         "bolt://localhost:7688"
     )
 
-    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else "MONEY_FLOW_MEMGRAPH_USER", "memgraph")
-    graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if archive else "MONEY_FLOW_MEMGRAPH_PASSWORD", "memgraph")
+    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_USER", "memgraph")
+    graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_PASSWORD", "memgraph")
 
     graph_database = GraphDatabase.driver(
         graph_db_url,

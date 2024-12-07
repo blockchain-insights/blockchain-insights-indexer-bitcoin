@@ -23,20 +23,20 @@ services:
       - blockchain-bitcoin-data:/home/bitcoin/.bitcoin
     restart: unless-stopped
 
-  money-flow-memgraph:
-    container_name: money-flow-memgraph
+  money-flow-memgraph-live:
+    container_name: money-flow-memgraph-live
     image: memgraph/memgraph-mage:1.22-memgraph-2.22
     ports:
       - "7687:7687"
       - "7444:7444"
     environment:
-      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_USER:-mario}
-      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_PASSWORD:-mariobros667}
+      - MEMGRAPH_USER=${MONEY_FLOW_MEMGRAPH_LIVE_USER:-mario}
+      - MEMGRAPH_PASSWORD=${MONEY_FLOW_MEMGRAPH_LIVE_PASSWORD:-mariobros667}
     command: ["--storage-properties-on-edges=true", "--storage-enable-schema-metadata=true", "--storage-recovery-thread-count=60", "--storage-gc-cycle-sec=300", "--log-level=TRACE", "--also-log-to-stderr", "--storage-snapshot-on-exit=false", "--storage-snapshot-interval-sec=14400", "--storage-snapshot-retention-count=2", "--storage-wal-enabled=true", "--isolation-level=READ_COMMITTED", "--replication-restore-state-on-startup=true", "--query-execution-timeout-sec=0"]
     volumes:
-      - money-flow-memgraph-data:/var/lib/memgraph
-      - money-flow-memgraph-log:/var/log/memgraph
-      - money-flow-memgraph-etc:/etc/memgraph
+      - money-flow-memgraph-live-data:/var/lib/memgraph
+      - money-flow-memgraph-live-log:/var/log/memgraph
+      - money-flow-memgraph-live-etc:/etc/memgraph
     restart: unless-stopped
 
   money-flow-memgraph-archive:
@@ -61,7 +61,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - QUICK_CONNECT_MG_HOST=money-flow-memgraph
+      - QUICK_CONNECT_MG_HOST=money-flow-memgraph-live
       - QUICK_CONNECT_MG_PORT=7687
 
   timeseries-postgres:
@@ -146,12 +146,12 @@ volumes:
   blockchain-bitcoin-data:
     name: blockchain-bitcoin-data
 
-  money-flow-memgraph-data:
-    name: money-flow-memgraph-data
-  money-flow-memgraph-log:
-    name: money-flow-memgraph-log
-  money-flow-memgraph-etc:
-    name: money-flow-memgraph-etc
+  money-flow-memgraph-live-data:
+    name: money-flow-memgraph-live-data
+  money-flow-memgraph-live-log:
+    name: money-flow-memgraph-live-log
+  money-flow-memgraph-live-etc:
+    name: money-flow-memgraph-live-etc
 
   money-flow-memgraph-archive-data:
     name: money-flow-memgraph-archive-data
