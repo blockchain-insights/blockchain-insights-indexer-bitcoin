@@ -130,7 +130,7 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
-    partition_start = os.getenv("MONEY_FLOW_PARTITION_START", 13)
+    partition_start = os.getenv("MONEY_FLOW_LIVE_PARTITION_START", 13)
 
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
