@@ -55,7 +55,7 @@ if __name__ == "__main__":
     )
 
     logger.add(
-        f"logs/{service_name}.log",
+        f"../../logs/{service_name}.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",
