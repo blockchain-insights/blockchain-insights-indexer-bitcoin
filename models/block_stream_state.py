@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text, String, UniqueConstraint
+from sqlalchemy import Column, Integer, PrimaryKeyConstraint, create_engine, text, String, UniqueConstraint, Text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from models import BLOCK_STREAM_TOPIC_NAME
 

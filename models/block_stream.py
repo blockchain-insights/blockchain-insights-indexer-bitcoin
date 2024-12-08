@@ -5,71 +5,44 @@ import threading
 import time
 import json
 import traceback
+from decimal import Decimal
 from confluent_kafka.admin import AdminClient
 from confluent_kafka import admin
 from confluent_kafka import Producer
 from loguru import logger
-from models import BLOCK_STREAM_TOPIC_NAME
+from typing import List
+from models.block_range_partitioner import BlockRangePartitioner
 from models.block_stream_state import BlockStreamStateManager
+from models.block_stream_utils import TransactionCache, BlockWindow
 from node.node import BitcoinNode
-from node.node_utils import parse_block_data
-
-
-class BlockRangePartitioner:
-    def __init__(self, num_partitions: int = 39):
-        self.num_partitions = num_partitions
-        self.range_size = 52560  # 144 blocks/day * 365 days
-
-        self.partition_ranges = {
-            i: (i * self.range_size, (i + 1) * self.range_size - 1)
-            for i in range(num_partitions)
-        }
-        logger.info("Initialized partitioner",
-                    partition_ranges=self.partition_ranges,
-                    blocks_per_year=self.range_size)
-
-    def __call__(self, block_height):
-        partition = block_height // self.range_size
-        if partition >= self.num_partitions:
-            partition = self.num_partitions - 1
-        if block_height % self.range_size == 0:
-            logger.info("Reached partition boundary",
-                        block_height=block_height,
-                        partition=partition,
-                        year_number=partition + 1)
-        return int(partition)
-
-    def get_partition_range(self, partition):
-        start = partition * self.range_size
-        end = (partition + 1) * self.range_size - 1
-        if partition == self.num_partitions - 1:
-            end = float('inf')
-        return (start, end)
 
 
 class BlockStreamProducer:
-    def __init__(self, kafka_config, bitcoin_node):
+    def __init__(self, kafka_config: dict, bitcoin_node, num_partitions: int = 39):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
-
-        self.topic_name = BLOCK_STREAM_TOPIC_NAME
-        self.num_partitions = 39
+        self.topic_name = "transactions"
+        self.num_partitions = num_partitions
         self.partitioner = BlockRangePartitioner(self.num_partitions)
 
         self.admin_client = AdminClient(kafka_config)
         self.ensure_topic_exists()
 
+        self.duplicate_tx = ['d5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599', 'e3bf3d07d4b0375638d5f1db5255fe07ba2c4cb067cd81b84ee974b6585fb468']
+        self.duplicate_block = [91812, 91722]
+
     def ensure_topic_exists(self):
         try:
             metadata = self.admin_client.list_topics(timeout=10)
             if self.topic_name not in metadata.topics:
-                new_topic = admin.NewTopic(self.topic_name,
-                                           num_partitions=self.num_partitions,
-                                           replication_factor=1,
-                                           config={'retention.ms': '-1', 'retention.bytes': '-1'})
+                new_topic = admin.NewTopic(
+                    self.topic_name,
+                    num_partitions=self.num_partitions,
+                    replication_factor=1,
+                    config={'retention.ms': '-1', 'retention.bytes': '-1'}
+                )
 
                 fs = self.admin_client.create_topics([new_topic])
-
                 for topic, future in fs.items():
                     try:
                         future.result()
@@ -84,143 +57,221 @@ class BlockStreamProducer:
             logger.error(f"Error managing topic", error=e, trb=traceback.format_exc())
             raise
 
-    def process(self, block_data):
-        transactions = block_data.transactions
+    def process_transaction(self, tx: dict, block: dict, cache: TransactionCache) -> dict:
+        """Process a single transaction with cached lookups"""
+        is_coinbase = len(tx["vin"]) == 1 and "coinbase" in tx["vin"][0]
 
+        # Process inputs
+        in_amount_by_address = {}
+        if not is_coinbase:
+            for vin in tx["vin"]:
+                address, amount = cache.get_output(vin["txid"], str(vin["vout"]))
+                in_amount_by_address[address] = in_amount_by_address.get(address, 0) + amount
+
+        # Process outputs
+        out_amount_by_address = {}
+        for vout in tx["vout"]:
+            if vout["scriptPubKey"].get("type") in ["nonstandard", "nulldata"]:
+                continue
+
+            address = cache._derive_address(vout["scriptPubKey"])
+            amount = int(Decimal(vout["value"]) * 100000000)
+            out_amount_by_address[address] = out_amount_by_address.get(address, 0) + amount
+
+        # Calculate final amounts after cancellation
+        for address in set(in_amount_by_address.keys()) & set(out_amount_by_address.keys()):
+            diff = in_amount_by_address[address] - out_amount_by_address[address]
+            if diff > 0:
+                in_amount_by_address[address] = diff
+                out_amount_by_address[address] = 0
+            elif diff < 0:
+                out_amount_by_address[address] = -diff
+                in_amount_by_address[address] = 0
+            else:
+                in_amount_by_address[address] = out_amount_by_address[address] = 0
+
+        # Build transaction object
+        return {
+            "tx_id": tx["txid"],
+            "tx_index": tx.get("index", 0),
+            "timestamp": block["time"],
+            "block_height": block["height"],
+            "is_coinbase": is_coinbase,
+            "in_total_amount": sum(in_amount_by_address.values()),
+            "out_total_amount": sum(out_amount_by_address.values()),
+            "vins": [
+                {"address": addr, "amount": amt, "tx_id": tx["txid"]}
+                for addr, amt in in_amount_by_address.items()
+                if amt != 0
+            ],
+            "vouts": [
+                {"address": addr, "amount": amt, "tx_id": tx["txid"]}
+                for addr, amt in out_amount_by_address.items()
+                if amt != 0
+            ],
+            "size": tx.get("size", 0),
+            "vsize": tx.get("vsize", 0),
+            "weight": tx.get("weight", 0)
+        }
+
+    def process_block(self, block: dict, cache: TransactionCache) -> List[dict]:
+        """Process all transactions in a block"""
         try:
-            organized_transactions = []
-            for i in range(0, len(transactions)):
-                tx = transactions[i]
-                in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
+            transactions = []
+            start_time = time.time()
 
-                inputs = [{"address": address, "amount": in_amount_by_address[address], "tx_id": tx.tx_id} for address in input_addresses]
-                outputs = [{"address": address, "amount": out_amount_by_address[address], "tx_id": tx.tx_id} for address in output_addresses]
+            for tx in block["tx"]:
+                if tx["txid"] in self.duplicate_tx and tx['blockheight'] in self.duplicate_block:
+                    logger.warning(f"Skipping duplicate transaction {tx['txid']}")
+                    continue
 
-                organized_transactions.append({
-                    "tx_id": tx.tx_id,
-                    "tx_index": i,
-                    "timestamp": tx.timestamp,
-                    "block_height": tx.block_height,
-                    "is_coinbase": tx.is_coinbase,
-                    "in_total_amount": in_total_amount,
-                    "out_total_amount": out_total_amount,
-                    "vins": inputs,
-                    "vouts": outputs,
-                    "size": tx.size,
-                    "vsize": tx.vsize,
-                    "weight": tx.weight
-                })
+                transaction = self.process_transaction(tx, block, cache)
+                transactions.append(transaction)
 
-            self._send_to_stream(self.topic_name, organized_transactions)
+            end_time = time.time()
+            time_taken = end_time - start_time
+
+            logger.info(
+                "Processed block",
+                block_height=block["height"],
+                num_transactions=len(transactions),
+                time_taken=f"{time_taken:.2f}s",
+                tps=f"{len(transactions) / time_taken:.2f}" if time_taken > 0 else "∞"
+            )
+
+            return transactions
+
+        except Exception as e:
+            logger.error(
+                "Failed to process block",
+                block_height=block["height"],
+                error=str(e),
+                traceback=traceback.format_exc()
+            )
+            return []
+
+    def send_to_stream(self, transactions: List[dict]):
+        """Send processed transactions to Kafka stream"""
+        try:
+            for tx in transactions:
+                partition = self.partitioner(tx["block_height"])
+                self.producer.produce(
+                    topic=self.topic_name,
+                    key=tx["tx_id"],
+                    value=json.dumps(tx),
+                    partition=partition,
+                    timestamp=int(tx["timestamp"] * 1000)
+                )
+            self.producer.flush()
+
+        except Exception as e:
+            logger.error(
+                "Failed to send transactions to stream",
+                error=str(e),
+                traceback=traceback.format_exc()
+            )
+            raise
+
+
+class BlockStream:
+    def __init__(
+            self,
+            bitcoin_node,
+            producer: BlockStreamProducer,
+            state_manager,
+            terminate_event: threading.Event,
+            window_size: int = 3
+    ):
+        self.bitcoin_node = bitcoin_node
+        self.producer = producer
+        self.state_manager = state_manager
+        self.terminate_event = terminate_event
+        self.window = BlockWindow(window_size)
+
+    def process_window(self, start_height: int) -> bool:
+        """Process a window of blocks"""
+        try:
+            # Get blocks for window
+            end_height = start_height + self.window.size - 1
+            blocks = self.bitcoin_node.get_blocks_by_height_range(start_height, end_height)
+
+            if not blocks:
+                return False
+
+            # Update window cache
+            self.window.update(blocks)
+
+            # Process each block in window
+            for block in blocks:
+                if self.state_manager.check_if_block_height_is_indexed(block["height"]):
+                    logger.info(f"Skipping block. Already indexed.", block_height=block["height"])
+                    continue
+
+                transactions = self.producer.process_block(block, self.window.cache)
+                if transactions:
+                    self.producer.send_to_stream(transactions)
+                    self.state_manager.add_block_height(block["height"])
+                else:
+                    return False
 
             return True
 
         except Exception as e:
-            logger.error(f"An exception occurred",  error=e, trb=traceback.format_exc())
-            return False
-
-    def _send_to_stream(self, topic, transactions):
-        try:
-            for transaction in transactions:
-
-                partition = self.partitioner(transaction["block_height"])
-
-                self.producer.produce(topic,
-                                      key=transaction["tx_id"],
-                                      value=json.dumps(transaction),
-                                      partition=partition)
-            self.producer.flush()
-        except Exception as e:
-            logger.error(f"An exception occurred",  error=e, trb=traceback.format_exc())
-
-
-class BlockStream:
-
-    def __init__(self,
-                 bitcoin_node,
-                 block_stream_producer,
-                 block_stream_state_manager,
-                 terminate_event: threading.Event):
-
-        self.bitcoin_node = bitcoin_node
-        self.block_stream_producer = block_stream_producer
-        self.block_stream_state_manager = block_stream_state_manager
-        self.terminate_event = terminate_event
-
-    def index_block(self, block_height):
-        try:
-            block = self.bitcoin_node.get_block_by_height(block_height)
-            num_transactions = len(block["tx"])
-            start_time = time.time()
-            block_data = parse_block_data(block)
-
-            success = self.block_stream_producer.process(block_data)
-
-            end_time = time.time()
-            time_taken = end_time - start_time
-            formatted_num_transactions = "{:>4}".format(num_transactions)
-            formatted_time_taken = "{:6.2f}".format(time_taken)
-            formatted_tps = "{:8.2f}".format(
-                num_transactions / time_taken if time_taken > 0 else float("inf")
+            logger.error(
+                "Failed to process block window",
+                start_height=start_height,
+                error=str(e),
+                traceback=traceback.format_exc()
             )
-
-            if time_taken > 0:
-                logger.info("Streaming transactions", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions, time_taken=formatted_time_taken, tps=formatted_tps)
-            else:
-                logger.info("Streamed transactions in 0.00 seconds (  Inf TPS).", block_height=f"{block_height:>6}", num_transactions=formatted_num_transactions)
-
-            return success
-        except Exception as e:
-            logger.error(f"Failed to index block.", block_height=block_height, error=str(e))
             return False
 
     def run(self, start_height: int):
+        """Main processing loop"""
         skip_blocks = 6
         forward_block_height = start_height
 
         while not self.terminate_event.is_set():
-            current_block_height = self.bitcoin_node.get_current_block_height() - skip_blocks
-            block_height = forward_block_height
+            try:
+                current_block_height = self.bitcoin_node.get_current_block_height() - skip_blocks
 
-            if block_height > current_block_height:
-                logger.info(
-                    f"Waiting for new blocks.",
-                    block_height=current_block_height
+                if forward_block_height > current_block_height:
+                    logger.info(
+                        "Waiting for new blocks",
+                        current_height=current_block_height,
+                        next_height=forward_block_height
+                    )
+                    time.sleep(10)
+                    continue
+
+                success = self.process_window(forward_block_height)
+
+                if success:
+                    forward_block_height += self.window.size
+                else:
+                    logger.error(
+                        "Failed to process window",
+                        start_height=forward_block_height
+                    )
+                    time.sleep(30)
+
+            except Exception as e:
+                logger.error(
+                    "Error in main processing loop",
+                    error=str(e),
+                    traceback=traceback.format_exc()
                 )
-                time.sleep(10)
-                continue
-
-            while self.block_stream_state_manager.check_if_block_height_is_indexed(block_height):
-                logger.info(f"Skipping block. Already indexed.", block_height=block_height)
-                block_height += 1
-
-            success = self.index_block(block_height)
-
-            if success:
-                self.block_stream_state_manager.add_block_height(block_height)
-                forward_block_height = block_height + 1
-            else:
-                logger.error(f"Failed to index block.", block_height=block_height)
                 time.sleep(30)
-
-
-terminate_event = threading.Event()
-
-
-def shutdown_handler(signum, frame):
-    logger.info(
-        "Shutdown signal received. Waiting for current processing to complete before shutting down."
-    )
-    terminate_event.set()
 
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
 
     def patch_record(record):
         record["extra"]["service"] = 'bitcoin-block-stream'
         return True
+
 
     logger.remove()
     logger.add(
@@ -238,19 +289,34 @@ if __name__ == "__main__":
         filter=patch_record,
     )
 
+    # Setup shutdown handling
+    terminate_event = threading.Event()
+
+
+    def shutdown_handler(signum, frame):
+        logger.info("Shutdown signal received. Waiting for current processing to complete...")
+        terminate_event.set()
+
+
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    db_url = os.getenv("BLOCK_STREAM_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5420/block_stream")
-    redpanda_bootstrap_servers = os.getenv("BLOCK_STREAM_REDPANDA_BOOTSTRAP_SERVERS", "localhost:19092")
-    bitcoin_node_rpc_url = os.getenv("BITCOIN_NODE_RPC_URL", "http://bitcoin-node:8332")
+    # Initialize components
+    db_url = os.getenv("BLOCK_STREAM_DB_CONNECTION_STRING")
+    redpanda_bootstrap_servers = os.getenv("BLOCK_STREAM_REDPANDA_BOOTSTRAP_SERVERS")
+    bitcoin_node_rpc_url = os.getenv("BITCOIN_NODE_RPC_URL")
 
     bitcoin_node = BitcoinNode(bitcoin_node_rpc_url)
-    block_stream_state_manager = BlockStreamStateManager(db_url)
+    state_manager = BlockStreamStateManager(db_url)
+
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
         'enable.idempotence': True,
+        'compression.type': 'zstd',
+        'acks': 'all',
     }
+
+    block_stream_state_manager = BlockStreamStateManager(db_url)
     block_stream_producer = BlockStreamProducer(kafka_config, bitcoin_node)
     logger.info("Starting block stream")
 
@@ -259,3 +325,4 @@ if __name__ == "__main__":
     block_stream_producer.run(start_height)
 
     logger.info("Block stream stopped.")
+
