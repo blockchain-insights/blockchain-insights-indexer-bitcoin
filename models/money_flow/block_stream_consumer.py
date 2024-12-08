@@ -122,11 +122,11 @@ if __name__ == "__main__":
     )
 
     db_url = os.getenv(
-        "REDPANDA_DB_CONNECTION_STRING",
+        "BLOCK_STREAM_DB_CONNECTION_STRING",
         "postgresql://postgres:changeit456$@localhost:5420/block_stream"
     )
     redpanda_bootstrap_servers = os.getenv(
-        "REDPANDA_BOOTSTRAP_SERVERS",
+        "BLOCK_STREAM_REDPANDA_BOOTSTRAP_SERVERS",
         "localhost:19092"
     )
 

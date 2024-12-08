@@ -7,3 +7,4 @@ docs/
 .idea/
 .pytest_cache/
 .gitignore
+charts/
