@@ -300,6 +300,10 @@ if __name__ == "__main__":
         'enable.idempotence': True,
         'compression.type': 'zstd',
         'acks': 'all',
+        'message.max.bytes': 10485760,  # 10MB
+        'batch.size': 1000000,  # 1MB
+        'linger.ms': 100,
+        'compression.level': 9  # Max ZSTD compression
     }
 
     block_stream_state_manager = BlockStreamStateManager(db_url)
