@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2-alpha] - 2024-12-09
+- BIP30 support added
+- Improved block streamer performance, removed pickle files dependency
+
 ## [2.0.1-alpha] - 2024-12-04
 - Fixed partition hooping bug in block streamer base
 - Memgraph based Money Flow indexing module has been replaced with standard Money Flow indexer
