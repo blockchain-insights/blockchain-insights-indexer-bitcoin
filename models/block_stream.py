@@ -78,18 +78,6 @@ class BlockStreamProducer:
             amount = int(Decimal(vout["value"]) * 100000000)
             out_amount_by_address[address] = out_amount_by_address.get(address, 0) + amount
 
-        # Calculate final amounts after cancellation
-        for address in set(in_amount_by_address.keys()) & set(out_amount_by_address.keys()):
-            diff = in_amount_by_address[address] - out_amount_by_address[address]
-            if diff > 0:
-                in_amount_by_address[address] = diff
-                out_amount_by_address[address] = 0
-            elif diff < 0:
-                out_amount_by_address[address] = -diff
-                in_amount_by_address[address] = 0
-            else:
-                in_amount_by_address[address] = out_amount_by_address[address] = 0
-
         # Build transaction object
         return {
             "tx_id": tx["txid"],
