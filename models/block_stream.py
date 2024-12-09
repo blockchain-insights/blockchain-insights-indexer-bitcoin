@@ -121,7 +121,7 @@ class BlockStreamProducer:
             start_time = time.time()
 
             for tx in block["tx"]:
-                if tx["txid"] in self.duplicate_tx and tx['blockheight'] in self.duplicate_block:
+                if tx["txid"] in self.duplicate_tx and block['height'] in self.duplicate_block:
                     logger.warning(f"Skipping duplicate transaction {tx['txid']}")
                     continue
 
@@ -211,8 +211,6 @@ class BlockStream:
                 if transactions:
                     self.producer.send_to_stream(transactions)
                     self.state_manager.add_block_height(block["height"])
-                else:
-                    return False
 
             return True
 
@@ -275,7 +273,7 @@ if __name__ == "__main__":
 
     logger.remove()
     logger.add(
-        "../../logs/bitcoin-block-stream.log",
+        "../logs/bitcoin-block-stream.log",
         rotation="500 MB",
         format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
         level="DEBUG",

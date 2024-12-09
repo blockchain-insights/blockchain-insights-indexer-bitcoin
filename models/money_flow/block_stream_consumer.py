@@ -95,7 +95,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     archive = args.archive
 
-    service_name = 'money-flow-archive-consumer' if archive else 'money-flow-consumer'
+    service_name = 'money-flow-archive-consumer' if archive else 'money-flow-live-consumer'
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
@@ -130,7 +130,9 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
-    partition_start = os.getenv("MONEY_FLOW_LIVE_PARTITION_START", 13)
+    partition_start = 0
+    if not archive:
+        partition_start = os.getenv("MONEY_FLOW_LIVE_PARTITION_START", 13)
 
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
@@ -171,5 +173,5 @@ if __name__ == "__main__":
     finally:
         block_stream_cursor_manager.close()
         graph_database.close()
-        logger.info("Balance indexer consumer stopped")
+        logger.info("Money flow indexer consumer stopped")
 
