@@ -2,6 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3-alpha] - 2024-12-10
+- Block Streamer fixes and performance improvements
+
 ## [2.0.2-alpha] - 2024-12-09
 - BIP30 support added
 - Improved block streamer performance, removed pickle files dependency
