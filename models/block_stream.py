@@ -13,7 +13,7 @@ from loguru import logger
 from typing import List
 from models.block_range_partitioner import BlockRangePartitioner
 from models.block_stream_state import BlockStreamStateManager
-from models.block_stream_utils import TransactionOutputCache
+from models.transaction_output_cache import TransactionOutputCache
 from node.node import BitcoinNode
 
 
