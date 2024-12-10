@@ -26,14 +26,13 @@ class TransactionOutputCache:
         self.checkpoint_interval = checkpoint_interval
         self.bitcoin_node = bitcoin_node
 
-        # Track blocks for both checkpointing and file management
         self.pending_block_heights = set()  # Track which blocks have pending data
         self.last_checkpoint_time = time.time()
 
         self.conn = duckdb.connect(":memory:")
         self.highest_cached_block = None
         self.state_manager = BlockStreamStateManager(db_url) if db_url else None
-        self.terminate_event = terminate_event  # Add this line
+        self.terminate_event = terminate_event
 
         self._initialize_tables()
         self._restore_from_parquet_files()
@@ -42,7 +41,6 @@ class TransactionOutputCache:
 
     def _initialize_tables(self):
         """Initialize the in-memory tables"""
-        # Main outputs table for querying
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS outputs (
                 txid VARCHAR,
@@ -53,7 +51,6 @@ class TransactionOutputCache:
             )
         """)
 
-        # Temporary table for staging new outputs
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_outputs (
                 txid VARCHAR,
@@ -69,19 +66,14 @@ class TransactionOutputCache:
         logger.info("Initialized in-memory transaction outputs tables and indexes")
 
     def _get_parquet_file_name(self, block_height: int) -> str:
-        """Generate parquet file name based on block height"""
         file_block = (block_height // self.blocks_per_file) * self.blocks_per_file
         return f"blocks_{file_block:07d}.parquet"
 
     def _get_parquet_path(self, block_height: int) -> str:
-        """Get full path for parquet file based on block height"""
         return str(self.data_dir / self._get_parquet_file_name(block_height))
 
     def _get_highest_cached_block(self) -> Optional[int]:
-        """Get the highest block height from the cache"""
-        result = self.conn.execute("""
-            SELECT MAX(block_height) FROM outputs
-        """).fetchone()
+        result = self.conn.execute("SELECT MAX(block_height) FROM outputs").fetchone()
         return result[0] if result and result[0] is not None else None
 
     def _restore_from_parquet_files(self):
@@ -95,7 +87,6 @@ class TransactionOutputCache:
             logger.info(f"Found {len(parquet_files)} parquet files to restore")
 
             for parquet_file in parquet_files:
-
                 if self.terminate_event and self.terminate_event.is_set():
                     logger.info("Termination requested, stopping resync process")
                     return
@@ -122,7 +113,6 @@ class TransactionOutputCache:
             raise
 
     def _get_missing_block_ranges(self, last_indexed_block: int) -> List[tuple[int, int]]:
-        """Get ranges of blocks that need to be resynced"""
         if self.highest_cached_block is None:
             return [(0, last_indexed_block)]
 
@@ -150,49 +140,7 @@ class TransactionOutputCache:
 
         return missing_ranges
 
-    def _resync_missing_transactions(self, missing_ranges: List[tuple[int, int]]):
-        """Resync missing transactions for given block ranges"""
-        total_blocks = sum(end - start + 1 for start, end in missing_ranges)
-        logger.info(f"Starting resync of {total_blocks} missing blocks across {len(missing_ranges)} ranges")
-
-        for start_height, end_height in missing_ranges:
-            logger.info(f"Resyncing blocks {start_height} to {end_height}")
-
-            try:
-                CHUNK_SIZE = 100
-                for chunk_start in range(start_height, end_height + 1, CHUNK_SIZE):
-
-                    if self.terminate_event and self.terminate_event.is_set():
-                        logger.info("Termination requested, stopping resync process")
-                        return
-
-                    chunk_end = min(chunk_start + CHUNK_SIZE - 1, end_height)
-
-                    blocks = self.bitcoin_node.get_blocks_by_height_range(chunk_start, chunk_end)
-                    if not blocks:
-                        logger.warning(f"No blocks returned for range {chunk_start}-{chunk_end}")
-                        continue
-
-                    for block in blocks:
-
-                        if self.terminate_event and self.terminate_event.is_set():
-                            logger.info("Termination requested, stopping resync process")
-                            return
-
-                        for tx in block["tx"]:
-                            self.cache_transaction(block["height"], tx)
-
-                    # Force write after each chunk
-                    self._write_pending_to_parquet()
-
-            except Exception as e:
-                logger.error(f"Error resyncing blocks {start_height}-{end_height}: {str(e)}")
-                raise
-
-        logger.info("Completed resyncing missing transactions")
-
     def _validate_and_resync_cache(self):
-        """Validate cache consistency and resync missing blocks"""
         if not self.state_manager or not self.bitcoin_node:
             logger.warning("Missing state manager or bitcoin node, skipping cache validation")
             return
@@ -225,16 +173,127 @@ class TransactionOutputCache:
             logger.error(f"Error validating and resyncing cache: {e}")
             raise
 
+    def _get_batch_size_for_block(self, current_height: int) -> int:
+        """
+        Returns the batch size for fetching blocks based on the current block height.
+
+        Logic:
+        - At block 0: fetch 64 blocks at a time.
+        - At block 850,000: fetch 1 block at a time.
+        - Linearly scale down from 64 to 1 between 0 and 850,000.
+        """
+        max_height = 850000
+        max_batch = 8
+        min_batch = 1
+
+        if current_height >= max_height:
+            return min_batch
+
+        # Linear scaling:
+        # fraction of progress = current_height / max_height
+        # Decrease from 64 to 1 as we go from 0 to 850k.
+        fraction = current_height / max_height
+        batch_size = max(min_batch, round(max_batch - (max_batch - min_batch) * fraction))
+        return batch_size
+
+    def _resync_missing_transactions(self, missing_ranges: List[tuple[int, int]]):
+        """Resync missing transactions for given block ranges"""
+        total_blocks = sum(end - start + 1 for start, end in missing_ranges)
+        logger.info(f"Starting resync of {total_blocks} missing blocks across {len(missing_ranges)} ranges")
+
+        for start_height, end_height in missing_ranges:
+            logger.info(f"Resyncing blocks {start_height} to {end_height}")
+
+            try:
+                current_height = start_height
+                while current_height <= end_height:
+                    if self.terminate_event and self.terminate_event.is_set():
+                        logger.info("Termination requested, stopping resync process")
+                        return
+
+                    # Determine batch size dynamically based on current height
+                    batch_size = self._get_batch_size_for_block(current_height)
+                    upper_bound = min(current_height + batch_size - 1, end_height)
+
+                    blocks = self.bitcoin_node.get_blocks_by_height_range(current_height, upper_bound)
+                    if not blocks:
+                        logger.warning(f"No blocks returned for range {current_height}-{upper_bound}")
+                        current_height = upper_bound + 1
+                        continue
+
+                    bulk_outputs = []
+                    block_heights = set()
+                    for block in blocks:
+                        if self.terminate_event and self.terminate_event.is_set():
+                            logger.info("Termination requested, stopping resync process")
+                            return
+                        block_height = block["height"]
+                        for tx in block["tx"]:
+                            bulk_outputs.extend(self._transform_tx_outputs(block_height, tx))
+                        block_heights.add(block_height)
+
+                    if bulk_outputs:
+                        # Measure insertion time for TPS calculation
+                        start_time = time.time()
+                        self._bulk_insert_outputs(bulk_outputs)
+                        end_time = time.time()
+
+                        inserted_count = len(bulk_outputs)
+                        elapsed = end_time - start_time
+                        tps = inserted_count / elapsed if elapsed > 0 else inserted_count
+                        logger.info(
+                            f"Inserted {inserted_count} tx cache outputs in {elapsed:.4f}s (TPS: {tps:.2f}), "
+                            f"batch_size={batch_size}, current_height={current_height}"
+                        )
+
+                        for bh in block_heights:
+                            self.pending_block_heights.add(bh)
+                        self._check_checkpoint_needed(max(block_heights))
+
+                    current_height = upper_bound + 1
+
+                # After finishing this range, force a write to parquet just to be safe
+                self._write_pending_to_parquet()
+
+            except Exception as e:
+                logger.error(f"Error resyncing blocks {start_height}-{end_height}: {str(e)}")
+                raise
+
+        logger.info("Completed resyncing missing transactions")
+
+    def _transform_tx_outputs(self, block_height: int, tx: dict) -> List[tuple]:
+        """Transform a single transaction into a list of output records"""
+        outputs = []
+        for vout in tx["vout"]:
+            if vout["scriptPubKey"].get("type") not in ["nonstandard", "nulldata"]:
+                address = self._derive_address(vout["scriptPubKey"])
+                amount = int(Decimal(vout["value"]) * 100000000)
+                outputs.append((tx["txid"], vout["n"], address, amount, block_height))
+        return outputs
+
+    def _bulk_insert_outputs(self, outputs: List[tuple]):
+        """Perform a bulk insert of outputs into both outputs and pending_outputs tables."""
+        if not outputs:
+            return
+
+        self.conn.executemany("""
+            INSERT INTO outputs (txid, vout_index, address, amount, block_height)
+            VALUES (?, ?, ?, ?, ?)
+        """, outputs)
+
+        self.conn.executemany("""
+            INSERT INTO pending_outputs (txid, vout_index, address, amount, block_height)
+            VALUES (?, ?, ?, ?, ?)
+        """, outputs)
+
     def _check_checkpoint_needed(self, current_block_height: int):
         """Determine if we need to checkpoint based on blocks or time"""
         should_checkpoint = False
 
-        # Check number of pending blocks
         if len(self.pending_block_heights) >= self.checkpoint_interval:
             should_checkpoint = True
             logger.info(f"Checkpoint triggered by block count: {len(self.pending_block_heights)} blocks pending")
 
-        # Also checkpoint if too much time has passed (e.g., 5 minutes)
         time_since_last_checkpoint = time.time() - self.last_checkpoint_time
         if time_since_last_checkpoint > 300:  # 5 minutes
             should_checkpoint = True
@@ -252,11 +311,9 @@ class TransactionOutputCache:
             if pending_count == 0:
                 return
 
-            # Get range of blocks to process
             min_block = min(self.pending_block_heights)
             max_block = max(self.pending_block_heights)
 
-            # Calculate affected file ranges
             min_file_block = (min_block // self.blocks_per_file) * self.blocks_per_file
             max_file_block = (max_block // self.blocks_per_file) * self.blocks_per_file
 
@@ -267,13 +324,11 @@ class TransactionOutputCache:
                 file_blocks=range(min_file_block, max_file_block + self.blocks_per_file, self.blocks_per_file)
             )
 
-            # Process each file range that needs updating
             for file_block in range(min_file_block, max_file_block + self.blocks_per_file, self.blocks_per_file):
                 parquet_path = self._get_parquet_path(file_block)
                 block_range_start = file_block
                 block_range_end = file_block + self.blocks_per_file - 1
 
-                # Get pending outputs for this block range
                 temp_path = str(self.data_dir / f'temp_{file_block}_{int(time.time())}.parquet')
 
                 self.conn.execute(f"""
@@ -285,7 +340,6 @@ class TransactionOutputCache:
                     ) TO '{temp_path}' (FORMAT 'parquet')
                 """)
 
-                # Merge with existing file if it exists
                 if os.path.exists(parquet_path):
                     self.conn.execute(f"""
                         COPY (
@@ -298,7 +352,6 @@ class TransactionOutputCache:
                 else:
                     os.rename(temp_path, parquet_path)
 
-            # Clear pending outputs after successful write
             self.conn.execute("DELETE FROM pending_outputs")
             self.highest_cached_block = max_block
 
@@ -313,35 +366,17 @@ class TransactionOutputCache:
             raise
 
     def cache_transaction(self, block_height: int, tx: dict):
-        """Cache a transaction and track its block height"""
-        outputs = [
-            (
-                tx["txid"],
-                vout["n"],
-                self._derive_address(vout["scriptPubKey"]),
-                int(Decimal(vout["value"]) * 100000000),
-                block_height
-            )
-            for vout in tx["vout"]
-            if vout["scriptPubKey"].get("type") not in ["nonstandard", "nulldata"]
-        ]
-
+        """
+        Cache a single transaction. This method is still available for scenarios
+        where a single transaction caching might be needed.
+        """
+        outputs = self._transform_tx_outputs(block_height, tx)
         if outputs:
-            self.conn.executemany("""
-                INSERT INTO outputs (txid, vout_index, address, amount, block_height)
-                VALUES (?, ?, ?, ?, ?)
-            """, outputs)
-
-            self.conn.executemany("""
-                INSERT INTO pending_outputs (txid, vout_index, address, amount, block_height)
-                VALUES (?, ?, ?, ?, ?)
-            """, outputs)
-
+            self._bulk_insert_outputs(outputs)
             self.pending_block_heights.add(block_height)
             self._check_checkpoint_needed(block_height)
 
     def get_output(self, txid: str, vout_index: int) -> Tuple[str, int]:
-        """Get transaction output data by txid and output index"""
         result = self.conn.execute("""
             SELECT address, amount 
             FROM outputs
@@ -354,15 +389,10 @@ class TransactionOutputCache:
         return f"unknown-{txid}", 0
 
     def _derive_address(self, script_pubkey: dict) -> str:
-        """
-        Extract address from scriptPubKey using node_utils functions.
-        Raises ValueError if address cannot be derived.
-        """
         script_type = script_pubkey.get("type", "unknown")
         if script_type == "nulldata":
             return f"nulldata-{script_type}"
 
-        # Use the existing derive_address function from node_utils
         address = derive_address(script_pubkey, script_pubkey.get("asm", ""))
         if address.startswith("unknown-") or address.startswith("UNKNOWN_"):
             raise ValueError(f"Could not derive address for script type {script_type}: {script_pubkey}")
