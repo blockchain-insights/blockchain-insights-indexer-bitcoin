@@ -6,6 +6,7 @@ from typing import Tuple, Optional, List
 import duckdb
 from loguru import logger
 from models.block_stream_state import BlockStreamStateManager
+from node.node_utils import derive_address
 
 
 class TransactionOutputCache:
@@ -336,12 +337,20 @@ class TransactionOutputCache:
         return f"unknown-{txid}", 0
 
     def _derive_address(self, script_pubkey: dict) -> str:
-        """Extract address from scriptPubKey"""
-        if "address" in script_pubkey:
-            return script_pubkey["address"]
-        elif "addresses" in script_pubkey and script_pubkey["addresses"]:
-            return script_pubkey["addresses"][0]
-        return "unknown"
+        """
+        Extract address from scriptPubKey using node_utils functions.
+        Raises ValueError if address cannot be derived.
+        """
+        script_type = script_pubkey.get("type", "unknown")
+        if script_type == "nulldata":
+            return f"nulldata-{script_type}"
+
+        # Use the existing derive_address function from node_utils
+        address = derive_address(script_pubkey, script_pubkey.get("asm", ""))
+        if address.startswith("unknown-") or address.startswith("UNKNOWN_"):
+            raise ValueError(f"Could not derive address for script type {script_type}: {script_pubkey}")
+
+        return address
 
     def close(self):
         """Ensure all data is written before closing"""
