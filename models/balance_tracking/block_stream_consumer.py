@@ -81,7 +81,9 @@ if __name__ == "__main__":
         'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
-        'isolation.level': 'read_committed'
+        'max.partition.fetch.bytes': 10485760,  # 10MB - must match message.max.bytes
+        'fetch.message.max.bytes': 10485760,  # 10MB - legacy setting, still good to set
+        'receive.message.max.bytes': 10485760,  # 10MB - maximum size of messages the consumer can receive
     }
 
     try:

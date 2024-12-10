@@ -111,6 +111,11 @@ services:
       # Tells Seastar (the framework Redpanda uses under the hood) to use 1 core on the system.
       - --smp 1
       - --default-log-level=info
+        # Message size and replication configurations
+      - --kafka-conf message.max.bytes=10485760
+      - --kafka-conf replica.fetch.max.bytes=10485760
+      - --kafka-conf fetch.message.max.bytes=10485760
+      - --kafka-conf compression.type=zstd
     image: docker.redpanda.com/redpandadata/redpanda:v24.2.11
     volumes:
       - block-stream-redpanda-data:/var/lib/redpanda/data
