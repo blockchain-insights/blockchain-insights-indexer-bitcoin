@@ -12,11 +12,12 @@ from node.node_utils import derive_address
 class TransactionOutputCache:
     def __init__(
             self,
-            data_dir: str = 'tx_cache_parquet',
+            data_dir: str = '../../block_stream_tx_cache',
             checkpoint_interval: int = 1000,
-            blocks_per_file: int = 100,
+            blocks_per_file: int = 10000,
             db_url: Optional[str] = None,
-            bitcoin_node=None
+            bitcoin_node=None,
+            terminate_event=None
     ):
         self.data_dir = Path(os.getenv('BLOCK_STREAM_TRANSACTION_CACHE', data_dir))
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -32,6 +33,7 @@ class TransactionOutputCache:
         self.conn = duckdb.connect(":memory:")
         self.highest_cached_block = None
         self.state_manager = BlockStreamStateManager(db_url) if db_url else None
+        self.terminate_event = terminate_event  # Add this line
 
         self._initialize_tables()
         self._restore_from_parquet_files()
@@ -93,6 +95,11 @@ class TransactionOutputCache:
             logger.info(f"Found {len(parquet_files)} parquet files to restore")
 
             for parquet_file in parquet_files:
+
+                if self.terminate_event and self.terminate_event.is_set():
+                    logger.info("Termination requested, stopping resync process")
+                    return
+
                 if os.path.exists(parquet_file):
                     file_size = os.path.getsize(parquet_file) / (1024 * 1024)
                     logger.info(f"Restoring data from {parquet_file} ({file_size:.2f} MB)")
@@ -154,6 +161,11 @@ class TransactionOutputCache:
             try:
                 CHUNK_SIZE = 100
                 for chunk_start in range(start_height, end_height + 1, CHUNK_SIZE):
+
+                    if self.terminate_event and self.terminate_event.is_set():
+                        logger.info("Termination requested, stopping resync process")
+                        return
+
                     chunk_end = min(chunk_start + CHUNK_SIZE - 1, end_height)
 
                     blocks = self.bitcoin_node.get_blocks_by_height_range(chunk_start, chunk_end)
@@ -162,6 +174,11 @@ class TransactionOutputCache:
                         continue
 
                     for block in blocks:
+
+                        if self.terminate_event and self.terminate_event.is_set():
+                            logger.info("Termination requested, stopping resync process")
+                            return
+
                         for tx in block["tx"]:
                             self.cache_transaction(block["height"], tx)
 

@@ -18,7 +18,7 @@ from node.node import BitcoinNode
 
 
 class BlockStreamProducer:
-    def __init__(self, kafka_config: dict, bitcoin_node, db_url: str, num_partitions: int = 39):
+    def __init__(self, kafka_config: dict, bitcoin_node, db_url: str, num_partitions: int = 39, terminate_event: threading.Event = None):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
         self.topic_name = "transactions"
@@ -27,10 +27,11 @@ class BlockStreamProducer:
 
         self.admin_client = AdminClient(kafka_config)
         self.ensure_topic_exists()
-
+        self.terminate_event = terminate_event
         self.tx_cache = TransactionOutputCache(
             db_url=db_url,
-            bitcoin_node=bitcoin_node
+            bitcoin_node=bitcoin_node,
+            terminate_event=terminate_event,
         )
 
         self.duplicate_tx = [
@@ -336,7 +337,7 @@ if __name__ == "__main__":
         'compression.level': 9  # Max ZSTD compression
     }
 
-    producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url)
+    producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
     block_stream = BlockStream(bitcoin_node, producer, state_manager, terminate_event)
