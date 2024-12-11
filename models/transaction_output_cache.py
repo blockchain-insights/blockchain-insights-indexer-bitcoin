@@ -26,7 +26,7 @@ class TransactionOutputCache:
         self.checkpoint_interval = checkpoint_interval
         self.bitcoin_node = bitcoin_node
 
-        self.pending_block_heights = set()  # Track which blocks have pending data
+        self.pending_block_heights = set()
         self.last_checkpoint_time = time.time()
 
         self.conn = duckdb.connect(":memory:")
@@ -40,11 +40,10 @@ class TransactionOutputCache:
             self._validate_and_resync_cache()
 
     def _initialize_tables(self):
-        """Initialize the in-memory tables"""
+        """Initialize the in-memory tables with optimized schema"""
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS outputs (
-                txid VARCHAR,
-                vout_index INTEGER,
+                tx_key VARCHAR,        -- Combined txid-vout, e.g. {txid}-{vout}
                 address VARCHAR,
                 amount BIGINT,
                 block_height INTEGER
@@ -53,17 +52,18 @@ class TransactionOutputCache:
 
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS pending_outputs (
-                txid VARCHAR,
-                vout_index INTEGER,
+                tx_key VARCHAR,
                 address VARCHAR,
                 amount BIGINT,
                 block_height INTEGER
             )
         """)
 
-        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_txid_vout ON outputs(txid, vout_index)")
+        # Indexes
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_tx_key ON outputs(tx_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_block_height ON outputs(block_height)")
-        logger.info("Initialized in-memory transaction outputs tables and indexes")
+
+        logger.info("Initialized in-memory transaction outputs tables with optimized schema")
 
     def _get_parquet_file_name(self, block_height: int) -> str:
         file_block = (block_height // self.blocks_per_file) * self.blocks_per_file
@@ -174,14 +174,6 @@ class TransactionOutputCache:
             raise
 
     def _get_batch_size_for_block(self, current_height: int) -> int:
-        """
-        Returns the batch size for fetching blocks based on the current block height.
-
-        Logic:
-        - At block 0: fetch 64 blocks at a time.
-        - At block 850,000: fetch 1 block at a time.
-        - Linearly scale down from 64 to 1 between 0 and 850,000.
-        """
         max_height = 850000
         max_batch = 8
         min_batch = 1
@@ -189,9 +181,6 @@ class TransactionOutputCache:
         if current_height >= max_height:
             return min_batch
 
-        # Linear scaling:
-        # fraction of progress = current_height / max_height
-        # Decrease from 64 to 1 as we go from 0 to 850k.
         fraction = current_height / max_height
         batch_size = max(min_batch, round(max_batch - (max_batch - min_batch) * fraction))
         return batch_size
@@ -211,7 +200,6 @@ class TransactionOutputCache:
                         logger.info("Termination requested, stopping resync process")
                         return
 
-                    # Determine batch size dynamically based on current height
                     batch_size = self._get_batch_size_for_block(current_height)
                     upper_bound = min(current_height + batch_size - 1, end_height)
 
@@ -233,7 +221,6 @@ class TransactionOutputCache:
                         block_heights.add(block_height)
 
                     if bulk_outputs:
-                        # Measure insertion time for TPS calculation
                         start_time = time.time()
                         self._bulk_insert_outputs(bulk_outputs)
                         end_time = time.time()
@@ -252,7 +239,6 @@ class TransactionOutputCache:
 
                     current_height = upper_bound + 1
 
-                # After finishing this range, force a write to parquet just to be safe
                 self._write_pending_to_parquet()
 
             except Exception as e:
@@ -262,28 +248,29 @@ class TransactionOutputCache:
         logger.info("Completed resyncing missing transactions")
 
     def _transform_tx_outputs(self, block_height: int, tx: dict) -> List[tuple]:
-        """Transform a single transaction into a list of output records"""
+        """Transform a single transaction into a list of output records with composite key"""
         outputs = []
         for vout in tx["vout"]:
             if vout["scriptPubKey"].get("type") not in ["nonstandard", "nulldata"]:
+                tx_key = f"{tx['txid']}-{vout['n']}"
                 address = self._derive_address(vout["scriptPubKey"])
                 amount = int(Decimal(vout["value"]) * 100000000)
-                outputs.append((tx["txid"], vout["n"], address, amount, block_height))
+                outputs.append((tx_key, address, amount, block_height))
         return outputs
 
     def _bulk_insert_outputs(self, outputs: List[tuple]):
-        """Perform a bulk insert of outputs into both outputs and pending_outputs tables."""
+        """Perform a bulk insert of outputs with composite key"""
         if not outputs:
             return
 
         self.conn.executemany("""
-            INSERT INTO outputs (txid, vout_index, address, amount, block_height)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO outputs (tx_key, address, amount, block_height)
+            VALUES (?, ?, ?, ?)
         """, outputs)
 
         self.conn.executemany("""
-            INSERT INTO pending_outputs (txid, vout_index, address, amount, block_height)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO pending_outputs (tx_key, address, amount, block_height)
+            VALUES (?, ?, ?, ?)
         """, outputs)
 
     def _check_checkpoint_needed(self, current_block_height: int):
@@ -305,7 +292,7 @@ class TransactionOutputCache:
             self.last_checkpoint_time = time.time()
 
     def _write_pending_to_parquet(self):
-        """Write pending outputs to appropriate parquet files"""
+        """Write pending outputs to parquet files"""
         try:
             pending_count = self.conn.execute("SELECT COUNT(*) FROM pending_outputs").fetchone()[0]
             if pending_count == 0:
@@ -333,7 +320,7 @@ class TransactionOutputCache:
 
                 self.conn.execute(f"""
                     COPY (
-                        SELECT txid, vout_index, address, amount, block_height
+                        SELECT tx_key, address, amount, block_height
                         FROM pending_outputs 
                         WHERE block_height >= {block_range_start} 
                         AND block_height <= {block_range_end}
@@ -341,6 +328,7 @@ class TransactionOutputCache:
                 """)
 
                 if os.path.exists(parquet_path):
+                    # Merge existing data with new pending data
                     self.conn.execute(f"""
                         COPY (
                             SELECT * FROM parquet_scan('{parquet_path}')
@@ -365,11 +353,24 @@ class TransactionOutputCache:
             logger.error(f"Error writing checkpoint: {e}")
             raise
 
+    def cache_block(self, blocks):
+        all_outputs = []
+        block_heights = set()
+        for block in blocks:
+            block_heights.add(block['height'])
+            for tx in block["tx"]:
+                outputs = self._transform_tx_outputs(block['height'], tx)
+                if outputs:
+                    all_outputs.extend(outputs)
+
+        if all_outputs:
+            self._bulk_insert_outputs(all_outputs)
+            for block_height in block_heights:
+                self.pending_block_heights.add(block_height)
+                self._check_checkpoint_needed(block_height)
+
     def cache_transaction(self, block_height: int, tx: dict):
-        """
-        Cache a single transaction. This method is still available for scenarios
-        where a single transaction caching might be needed.
-        """
+        """Cache a single transaction"""
         outputs = self._transform_tx_outputs(block_height, tx)
         if outputs:
             self._bulk_insert_outputs(outputs)
@@ -377,12 +378,14 @@ class TransactionOutputCache:
             self._check_checkpoint_needed(block_height)
 
     def get_output(self, txid: str, vout_index: int) -> Tuple[str, int]:
+        """Lookup output using composite key"""
+        tx_key = f"{txid}-{vout_index}"
         result = self.conn.execute("""
             SELECT address, amount 
             FROM outputs
-            WHERE txid = ? AND vout_index = ?
+            WHERE tx_key = ?
             LIMIT 1
-        """, [txid, vout_index]).fetchone()
+        """, [tx_key]).fetchone()
 
         if result:
             return result[0], result[1]
@@ -396,29 +399,4 @@ class TransactionOutputCache:
         address = derive_address(script_pubkey, script_pubkey.get("asm", ""))
         if address.startswith("unknown-") or address.startswith("UNKNOWN_"):
             raise ValueError(f"Could not derive address for script type {script_type}: {script_pubkey}")
-
         return address
-
-    def close(self):
-        """Ensure all data is written before closing"""
-        try:
-            if self.pending_block_heights:
-                self._write_pending_to_parquet()
-
-            if self.state_manager:
-                self.state_manager.close()
-            self.conn.close()
-
-            logger.info(
-                "Closed transaction cache",
-                highest_cached_block=self.highest_cached_block
-            )
-        except Exception as e:
-            logger.error(f"Error closing cache: {e}")
-            raise
-
-    def __del__(self):
-        try:
-            self.close()
-        except:
-            pass

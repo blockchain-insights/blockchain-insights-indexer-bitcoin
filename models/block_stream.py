@@ -219,9 +219,10 @@ class BlockStream:
             if not blocks:
                 return False
 
-            for block in blocks:
-                for tx in block["tx"]:
-                    self.producer.tx_cache.cache_transaction(block['height'], tx)
+            self.producer.tx_cache.cache_block(blocks)
+            #for block in blocks:
+            #    for tx in block["tx"]:
+            #        self.producer.tx_cache.cache_transaction(block['height'], tx)
 
             # Process each block in window
             for block in blocks:
