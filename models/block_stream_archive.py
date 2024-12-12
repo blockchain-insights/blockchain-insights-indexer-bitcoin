@@ -156,6 +156,23 @@ if __name__ == "__main__":
         con.execute("CREATE INDEX idx_tx_in_prev ON tx_in(prev_txid, prev_vout)")
         con.execute("CREATE INDEX idx_tx_out_txid ON tx_out(txid)")
         con.execute("CREATE INDEX idx_tx_out_composite ON tx_out(txid, vout)")
+
+        # Create materialized view for vins data
+        con.execute("""
+            CREATE TABLE vins_data AS
+            SELECT 
+                i.txid as current_txid,
+                i.prev_txid,
+                i.prev_vout,
+                p_o.value as amount,
+                p_o.addresses as address
+            FROM tx_in i
+            LEFT JOIN tx_out p_o 
+                ON p_o.txid = i.prev_txid 
+                AND p_o.vout = i.prev_vout
+            ORDER BY i.txid, i.prev_vout
+        """)
+        con.execute("CREATE INDEX idx_vins_data_txid ON vins_data(current_txid)")
     except Exception as e:
         logger.warning("Index creation failed or not supported: {}", e)
 
@@ -185,17 +202,14 @@ if __name__ == "__main__":
 
     vins_query = """
         SELECT 
-            i.prev_txid,
-            i.prev_vout,
-            p_o.value as amount,
-            p_o.addresses as address,
-            i.txid as current_txid
-        FROM tx_in i
-        LEFT JOIN tx_out p_o 
-            ON p_o.txid = i.prev_txid 
-            AND p_o.vout = i.prev_vout
-        WHERE i.txid = '{}'
-        ORDER BY i.prev_vout
+            prev_txid,
+            prev_vout,
+            amount,
+            address,
+            current_txid
+        FROM vins_data
+        WHERE current_txid = '{}'
+        ORDER BY prev_vout
     """
 
     # Process transactions in batches
