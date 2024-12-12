@@ -25,8 +25,7 @@ class TransactionOutputCache:
                              'value': 'BIGINT',
                              'scriptpubkey': 'VARCHAR',
                              'addresses': 'VARCHAR'
-                         }},
-                         header=False);
+                         }});
         """)
 
         # Load tx_in data
@@ -44,8 +43,7 @@ class TransactionOutputCache:
                              'prev_vout': 'INTEGER',
                              'scriptsig': 'VARCHAR',
                              'sequence': 'BIGINT'
-                         }},
-                         header=False);
+                         }});
         """)
         
         # Create indexes for efficient joins

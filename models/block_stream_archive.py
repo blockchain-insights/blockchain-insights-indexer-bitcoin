@@ -66,6 +66,7 @@ def convert_csv_to_parquet():
         df = pd.read_csv(f'{CSV_DIR}/blocks-{BLOCK_RANGES}.csv', 
                         names=blocks_dtypes.keys(),
                         dtype=blocks_dtypes,
+                        header=None,
                         sep=';')
         df.to_parquet(blocks_parquet, index=False)
         
@@ -73,6 +74,7 @@ def convert_csv_to_parquet():
         df = pd.read_csv(f'{CSV_DIR}/transactions-{BLOCK_RANGES}.csv',
                         names=transactions_dtypes.keys(),
                         dtype=transactions_dtypes,
+                        header=None,
                         sep=';')
         df.to_parquet(transactions_parquet, index=False)
         
@@ -80,6 +82,7 @@ def convert_csv_to_parquet():
         df = pd.read_csv(f'{CSV_DIR}/tx_in-{BLOCK_RANGES}.csv',
                         names=tx_in_dtypes.keys(),
                         dtype=tx_in_dtypes,
+                        header=None,
                         sep=';')
         df.to_parquet(tx_in_parquet, index=False)
         
@@ -87,6 +90,7 @@ def convert_csv_to_parquet():
         df = pd.read_csv(f'{CSV_DIR}/tx_out-{BLOCK_RANGES}.csv',
                         names=tx_out_dtypes.keys(),
                         dtype=tx_out_dtypes,
+                        header=None,
                         sep=';')
         df.to_parquet(tx_out_parquet, index=False)
 
