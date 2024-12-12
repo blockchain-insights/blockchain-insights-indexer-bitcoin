@@ -1,0 +1,276 @@
+import sys
+import signal
+import threading
+import duckdb
+import json
+
+from loguru import logger
+
+blocks_csv = 'csv/blocks-1-99999.csv'
+transactions_csv = 'csv/transactions-1-99999.csv'
+tx_in_csv = 'csv/tx_in-1-99999.csv'
+tx_out_csv = 'csv/tx_out-1-99999.csv'
+
+if __name__ == "__main__":
+    # Setup logging
+    logger.remove()
+    logger.add(
+        "bitcoin-block-stream-archive.log",
+        rotation="500 MB",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}",
+        level="DEBUG"
+    )
+    logger.add(
+        sys.stdout,
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level}</level> | {message} | {extra}",
+        level="DEBUG",
+    )
+
+    # Setup shutdown handling
+    terminate_event = threading.Event()
+
+
+    def shutdown_handler(signum, frame):
+        logger.info("Shutdown signal received. Waiting for current processing to complete...")
+        terminate_event.set()
+
+
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
+    con = duckdb.connect()
+
+    # Create tables with updated schemas
+    # blocks: hash;height;version;size;prev_block_hash;merkleroot;time;bits;nonce
+    con.execute(f"""
+        CREATE OR REPLACE TABLE blocks AS
+        SELECT * FROM read_csv('{blocks_csv}',
+          delim=';',
+          quote='',
+          escape='',
+          header=false,
+          auto_detect=false,
+          columns={{
+            'hash': 'VARCHAR',
+            'height': 'INTEGER',
+            'version': 'INTEGER',
+            'size': 'INTEGER',
+            'prev_block_hash': 'VARCHAR',
+            'merkleroot': 'VARCHAR',
+            'time': 'INTEGER',
+            'bits': 'INTEGER',
+            'nonce': 'BIGINT'
+          }}
+        );
+    """)
+
+    # transactions: txid;block_hash;version;index
+    con.execute(f"""
+        CREATE OR REPLACE TABLE transactions AS
+        SELECT * FROM read_csv('{transactions_csv}',
+          delim=';',
+          quote='',
+          escape='',
+          header=false,
+          auto_detect=false,
+          columns={{
+            'txid': 'VARCHAR',
+            'block_hash': 'VARCHAR',
+            'version': 'INTEGER',
+            'index': 'INTEGER'
+          }}
+        );
+    """)
+
+    # tx_in: txid;prev_txid;prev_vout;scriptsig;sequence
+    con.execute(f"""
+        CREATE OR REPLACE TABLE tx_in AS
+        SELECT * FROM read_csv('{tx_in_csv}',
+          delim=';',
+          quote='',
+          escape='',
+          header=false,
+          auto_detect=false,
+          columns={{
+            'txid': 'VARCHAR',
+            'prev_txid': 'VARCHAR',
+            'prev_vout': 'BIGINT',
+            'scriptsig': 'VARCHAR',
+            'sequence': 'BIGINT'
+          }}
+        );
+    """)
+
+    # tx_out: txid;vout;value;scriptpubkey;addresses
+    con.execute(f"""
+        CREATE OR REPLACE TABLE tx_out AS
+        SELECT * FROM read_csv('{tx_out_csv}',
+          delim=';',
+          quote='',
+          escape='',
+          header=false,
+          auto_detect=false,
+          columns={{
+            'txid': 'VARCHAR',
+            'vout': 'INTEGER',
+            'value': 'BIGINT',
+            'scriptpubkey': 'VARCHAR',
+            'addresses': 'VARCHAR'
+          }}
+        );
+    """)
+
+    # Try creating indexes
+    try:
+        con.execute("CREATE INDEX idx_blocks_hash ON blocks(hash)")
+        con.execute("CREATE INDEX idx_transactions_txid ON transactions(txid)")
+        con.execute("CREATE INDEX idx_transactions_block_hash ON transactions(block_hash)")
+        con.execute("CREATE INDEX idx_tx_in_txid ON tx_in(txid)")
+        con.execute("CREATE INDEX idx_tx_out_txid ON tx_out(txid)")
+    except Exception as e:
+        logger.warning("Index creation failed or not supported: {}", e)
+
+    # One big query:
+    # Join transactions with blocks by block_hash = hash
+    # tx_in for inputs, tx_out for outputs
+    # p_o for previous outputs referenced by inputs
+    # Since we don't have block_height in transactions, we get height and time from blocks
+    # We have no size/vsize in the data, set them to None.
+    query = """
+    SELECT
+        t.txid AS tx_id,
+        t.index AS tx_index,
+        b.height AS block_height,
+        b.time AS timestamp,
+
+        -- We don't have size/vsize from CSV, set them to NULL
+        NULL::BIGINT AS size,
+        NULL::BIGINT AS vsize,
+        NULL::BIGINT AS weight,
+
+        i.prev_txid,
+        i.prev_vout,
+        i.scriptsig,
+        i.sequence,
+
+        p_o.value AS in_value,
+        p_o.addresses AS in_address,
+
+        o.vout AS out_index,
+        o.value AS out_value,
+        o.addresses AS out_address
+    FROM transactions t
+    JOIN blocks b ON t.block_hash = b.hash
+    LEFT JOIN tx_in i ON i.txid = t.txid
+    LEFT JOIN tx_out o ON o.txid = t.txid
+    LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
+    ORDER BY b.height, t.index;
+    """
+
+    rows = con.execute(query).fetchall()
+
+    # Group by tx_id
+    transactions_dict = {}
+    for r in rows:
+        if terminate_event.is_set():
+            break
+
+        (tx_id, tx_index, block_height, timestamp,
+         size, vsize, weight,
+         prev_txid, prev_vout, scriptsig, sequence,
+         in_value, in_address,
+         out_index, out_value, out_address) = r
+
+        if tx_id not in transactions_dict:
+            transactions_dict[tx_id] = {
+                "tx_id": tx_id,
+                "tx_index": tx_index,
+                "timestamp": timestamp,
+                "block_height": block_height,
+                "size": size,
+                "vsize": vsize,
+                "weight": weight,
+                "vins": [],
+                "vouts": []
+            }
+
+        tx_data = transactions_dict[tx_id]
+
+        # Handle inputs
+        if prev_txid is not None:
+            tx_data["vins"].append({
+                "tx_id": tx_id,
+                "address": in_address if in_address else None,
+                "amount": in_value if in_value else 0,
+                "prev_txid": prev_txid,
+                "prev_vout": prev_vout
+            })
+
+        # Handle outputs
+        if out_index is not None:
+            tx_data["vouts"].append({
+                "tx_id": tx_id,
+                "address": out_address if out_address else None,
+                "amount": out_value if out_value else 0
+            })
+
+    # Finalize messages
+    for tx_id, tx_data in transactions_dict.items():
+        if terminate_event.is_set():
+            break
+
+        vins_list = tx_data["vins"]
+        vouts_list = tx_data["vouts"]
+
+        # Determine is_coinbase
+        if vins_list:
+            is_coinbase = all(
+                vin["prev_txid"] == '0' * 64 and vin["prev_vout"] == 4294967295
+                for vin in vins_list
+            )
+        else:
+            is_coinbase = False
+
+        in_total_amount = sum(vin["amount"] for vin in vins_list)
+        out_total_amount = sum(vout["amount"] for vout in vouts_list)
+
+        # If coinbase and no input amount, set in_total_amount = out_total_amount
+        if is_coinbase and in_total_amount == 0:
+            in_total_amount = out_total_amount
+
+        # Restructure vins and vouts to the requested format
+        final_vins = [
+            {
+                "address": vin["address"],
+                "amount": vin["amount"],
+                "tx_id": vin["tx_id"]
+            } for vin in vins_list
+        ]
+
+        final_vouts = [
+            {
+                "address": vout["address"],
+                "amount": vout["amount"],
+                "tx_id": vout["tx_id"]
+            } for vout in vouts_list
+        ]
+
+        message = {
+            "tx_id": tx_data["tx_id"],
+            "tx_index": tx_data["tx_index"],
+            "timestamp": tx_data["timestamp"],
+            "block_height": tx_data["block_height"],
+            "is_coinbase": is_coinbase,
+            "in_total_amount": in_total_amount,
+            "out_total_amount": out_total_amount,
+            "vins": final_vins,
+            "vouts": final_vouts,
+            "size": tx_data["size"],  # None because not in CSV
+            "vsize": tx_data["vsize"],  # None because not in CSV
+            "weight": tx_data["weight"]  # None because not in CSV
+        }
+
+        print(json.dumps(message))
+        sys.stdout.flush()
+
+    logger.info("Processing completed or terminated.")
