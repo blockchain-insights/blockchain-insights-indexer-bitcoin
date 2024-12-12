@@ -175,16 +175,6 @@ if __name__ == "__main__":
         ORDER BY i.prev_vout
     """
 
-    coinbase_query = """
-        SELECT COUNT(*) = 1 AND COUNT(*) = (
-            SELECT COUNT(*)
-            FROM tx_in
-            WHERE txid = '{}' AND prev_txid = '{}' AND prev_vout = 4294967295
-        )
-        FROM tx_in
-        WHERE txid = '{}'
-    """
-
     # Process transactions in batches
     BATCH_SIZE = 1000
     offset = 0
@@ -205,10 +195,12 @@ if __name__ == "__main__":
             if terminate_event.is_set():
                 break
 
+            # Determine if this is a coinbase transaction (first transaction in block)
+            is_coinbase = (tx_index == 0)
+
             # Execute queries for this transaction
             vouts = con.execute(vouts_query.format(tx_id)).fetchall()
             vins = con.execute(vins_query.format(tx_id)).fetchall()
-            is_coinbase = con.execute(coinbase_query.format(tx_id, '0' * 64, tx_id)).fetchone()[0]
 
             vouts_list = [
                 {
