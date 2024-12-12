@@ -141,7 +141,7 @@ if __name__ == "__main__":
         b.time AS timestamp
     FROM transactions t
     JOIN blocks b ON t.block_hash = b.hash
-    ORDER BY b.height, t.index;
+    ORDER BY b.height, t.index
     """
 
     # SQL query templates
@@ -157,7 +157,7 @@ if __name__ == "__main__":
             ON o.txid = i.prev_txid 
             AND o.vout = i.prev_vout
         WHERE o.txid = '{}'
-        ORDER BY o.vout;
+        ORDER BY o.vout
     """
 
     vins_query = """
@@ -172,7 +172,7 @@ if __name__ == "__main__":
             ON p_o.txid = i.prev_txid 
             AND p_o.vout = i.prev_vout
         WHERE i.txid = '{}'
-        ORDER BY i.prev_vout;
+        ORDER BY i.prev_vout
     """
 
     coinbase_query = """
@@ -182,7 +182,7 @@ if __name__ == "__main__":
             WHERE txid = '{}' AND prev_txid = '{}' AND prev_vout = 4294967295
         )
         FROM tx_in
-        WHERE txid = '{}';
+        WHERE txid = '{}'
     """
 
     # Process transactions in batches
