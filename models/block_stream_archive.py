@@ -3,6 +3,8 @@ import signal
 import threading
 import duckdb
 import json
+import time
+from datetime import datetime
 
 from loguru import logger
 
@@ -178,6 +180,9 @@ if __name__ == "__main__":
     # Process transactions in batches
     BATCH_SIZE = 1000
     offset = 0
+    tx_count = 0
+    start_time = time.time()
+    last_log_time = start_time
     
     while True:
         batch_query = f"SELECT * FROM ({tx_query}) AS sub LIMIT {BATCH_SIZE} OFFSET {offset}"
@@ -260,6 +265,20 @@ if __name__ == "__main__":
 
             print(json.dumps(message))
             sys.stdout.flush()
+            
+            tx_count += 1
+            if tx_count % 1000 == 0:
+                current_time = time.time()
+                elapsed = current_time - last_log_time
+                tps = 1000 / elapsed if elapsed > 0 else 0
+                total_elapsed = current_time - start_time
+                avg_tps = tx_count / total_elapsed if total_elapsed > 0 else 0
+                
+                logger.info(
+                    "Processed {} transactions. Current TPS: {:.2f}, Average TPS: {:.2f}",
+                    tx_count, tps, avg_tps
+                )
+                last_log_time = current_time
 
 
         offset += BATCH_SIZE
