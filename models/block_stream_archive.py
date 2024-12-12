@@ -157,59 +157,67 @@ if __name__ == "__main__":
         con.execute("CREATE INDEX idx_tx_out_txid ON tx_out(txid)")
         con.execute("CREATE INDEX idx_tx_out_composite ON tx_out(txid, vout)")
 
-        # Create materialized view for vins data
+        # Create materialized view for all transaction data
         con.execute("""
-            CREATE TABLE vins_data AS
+            CREATE TABLE tx_data AS
             SELECT 
-                i.txid as current_txid,
-                i.prev_txid,
-                i.prev_vout,
-                p_o.value as amount,
-                p_o.addresses as address
-            FROM tx_in i
-            LEFT JOIN tx_out p_o 
-                ON p_o.txid = i.prev_txid 
-                AND p_o.vout = i.prev_vout
-            ORDER BY i.txid, i.prev_vout
+                t.txid AS tx_id,
+                t.index AS tx_index,
+                b.height AS block_height,
+                b.time AS timestamp,
+                o.vout as out_index,
+                o.value as out_amount,
+                o.addresses as out_address,
+                i.prev_txid as in_txid,
+                i.prev_vout as in_vout,
+                p_o.value as in_amount,
+                p_o.addresses as in_address
+            FROM transactions t
+            JOIN blocks b ON t.block_hash = b.hash
+            LEFT JOIN tx_out o ON t.txid = o.txid
+            LEFT JOIN tx_in i ON t.txid = i.txid
+            LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
+            ORDER BY b.height, t.index, o.vout, i.prev_vout
         """)
-        con.execute("CREATE INDEX idx_vins_data_txid ON vins_data(current_txid)")
+        con.execute("CREATE INDEX idx_tx_data_txid ON tx_data(tx_id)")
     except Exception as e:
         logger.warning("Index creation failed or not supported: {}", e)
 
-    # Query to get transactions joined with blocks
+    # Query to get all transaction data at once
     tx_query = """
-    SELECT 
-        t.txid AS tx_id,
-        t.index AS tx_index,
-        b.height AS block_height,
-        b.time AS timestamp
-    FROM transactions t
-    JOIN blocks b ON t.block_hash = b.hash
-    ORDER BY b.height, t.index
+    SELECT DISTINCT
+        tx_id,
+        tx_index,
+        block_height,
+        timestamp
+    FROM tx_data
+    ORDER BY block_height, tx_index
     """
 
-    # SQL query templates
+    # SQL query templates for inputs and outputs
     vouts_query = """
-        SELECT 
-            txid,
-            vout as out_index,
-            value as amount,
-            addresses as address
-        FROM tx_out
-        WHERE txid = '{}'
-        ORDER BY vout
+        SELECT DISTINCT
+            tx_id,
+            out_index,
+            out_amount as amount,
+            out_address as address
+        FROM tx_data
+        WHERE tx_id = '{}'
+        AND out_index IS NOT NULL
+        ORDER BY out_index
     """
 
     vins_query = """
-        SELECT 
-            prev_txid,
-            prev_vout,
-            amount,
-            address,
-            current_txid
-        FROM vins_data
-        WHERE current_txid = '{}'
-        ORDER BY prev_vout
+        SELECT DISTINCT
+            in_txid as prev_txid,
+            in_vout as prev_vout,
+            in_amount as amount,
+            in_address as address,
+            tx_id as current_txid
+        FROM tx_data
+        WHERE tx_id = '{}'
+        AND in_txid IS NOT NULL
+        ORDER BY in_vout
     """
 
     # Process transactions in batches
