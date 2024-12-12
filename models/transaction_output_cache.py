@@ -9,14 +9,14 @@ class TransactionOutputCache:
         self._initialize_tables(csv_dir, block_ranges)
 
     def _initialize_tables(self, csv_dir: str, block_ranges: str):
-        # Load tx_out data from CSV
+        # Load tx_out data
         self.conn.execute(f"""
-            CREATE TABLE tx_outputs AS
+            CREATE TABLE tx_out AS
             SELECT 
                 txid,
                 vout,
-                addresses as address,
-                value as amount
+                addresses,
+                value
             FROM read_csv('{csv_dir}/tx_out-{block_ranges}.csv',
                          sep=';',
                          columns={{
@@ -28,23 +28,48 @@ class TransactionOutputCache:
                          }},
                          header=False);
         """)
-        
-        # Create index for efficient lookups
-        self.conn.execute("""
-            CREATE INDEX idx_tx_outputs_lookup 
-            ON tx_outputs(txid, vout);
+
+        # Load tx_in data
+        self.conn.execute(f"""
+            CREATE TABLE tx_in AS
+            SELECT 
+                txid,
+                prev_txid,
+                prev_vout
+            FROM read_csv('{csv_dir}/tx_in-{block_ranges}.csv',
+                         sep=';',
+                         columns={{
+                             'txid': 'VARCHAR',
+                             'prev_txid': 'VARCHAR',
+                             'prev_vout': 'INTEGER',
+                             'scriptsig': 'VARCHAR',
+                             'sequence': 'BIGINT'
+                         }},
+                         header=False);
         """)
         
-        logger.info("Initialized transaction outputs table from CSV data")
+        # Create indexes for efficient joins
+        self.conn.execute("CREATE INDEX idx_tx_out_lookup ON tx_out(txid, vout)")
+        self.conn.execute("CREATE INDEX idx_tx_in_lookup ON tx_in(prev_txid, prev_vout)")
+        
+        logger.info("Initialized transaction tables from CSV data")
 
     def get_output(self, txid: str, vout_index: int) -> Tuple[str, int]:
         result = self.conn.execute("""
-            SELECT address, amount 
-            FROM tx_outputs
-            WHERE txid = ? AND vout = ?
-            LIMIT 1
-        """, [txid, vout_index]).fetchone()
+            SELECT 
+                i.prev_txid,
+                i.prev_vout,
+                p_o.value as amount,
+                p_o.addresses as address,
+                i.txid as current_txid
+            FROM tx_in i
+            LEFT JOIN tx_out p_o 
+                ON p_o.txid = i.prev_txid 
+                AND p_o.vout = i.prev_vout
+            WHERE i.txid = ?
+            ORDER BY i.prev_vout
+        """, [txid]).fetchone()
         
         if result:
-            return result[0], result[1]
+            return result[3], result[2]  # address, amount
         return f"unknown-{txid}", 0
