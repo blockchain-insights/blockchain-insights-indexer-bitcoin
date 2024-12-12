@@ -180,7 +180,6 @@ if __name__ == "__main__":
         # Process outputs
         vouts_list = [
             {
-                "tx_id": tx_id,
                 "address": vout[2] if vout[2] else None,
                 "amount": vout[1] if vout[1] else 0
             } for vout in vouts
@@ -189,7 +188,6 @@ if __name__ == "__main__":
         # Process inputs
         vins_list = [
             {
-                "tx_id": tx_id,
                 "address": vin[1] if vin[1] else None,
                 "amount": vin[0] if vin[0] else 0
             } for vin in vins
