@@ -169,14 +169,11 @@ if __name__ == "__main__":
         # Query inputs and their referenced outputs
         vins_query = """
         SELECT 
-            i.prev_txid,
-            i.prev_vout,
             p_o.value as amount,
             p_o.addresses as address
         FROM tx_in i
         LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
-        WHERE i.txid = ?
-        ORDER BY i.prev_vout;
+        WHERE i.txid = ?;
         """
         vins = con.execute(vins_query, [tx_id]).fetchall()
 
@@ -193,18 +190,22 @@ if __name__ == "__main__":
         vins_list = [
             {
                 "tx_id": tx_id,
-                "address": vin[3] if vin[3] else None,
-                "amount": vin[2] if vin[2] else 0,
-                "prev_txid": vin[0],
-                "prev_vout": vin[1]
+                "address": vin[1] if vin[1] else None,
+                "amount": vin[0] if vin[0] else 0
             } for vin in vins
         ]
 
-        # Determine if coinbase
-        is_coinbase = bool(vins_list) and all(
-            vin["prev_txid"] == '0' * 64 and vin["prev_vout"] == 4294967295
-            for vin in vins_list
+        # Query to check if transaction is coinbase
+        coinbase_query = """
+        SELECT COUNT(*) = 1 AND COUNT(*) = (
+            SELECT COUNT(*)
+            FROM tx_in
+            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
         )
+        FROM tx_in
+        WHERE txid = ?;
+        """
+        is_coinbase = con.execute(coinbase_query, [tx_id, '0' * 64, tx_id]).fetchone()[0]
 
         # Calculate totals
         in_total_amount = sum(vin["amount"] for vin in vins_list)
