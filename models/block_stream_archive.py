@@ -157,6 +157,7 @@ if __name__ == "__main__":
         # Query outputs for this transaction
         vouts_query = """
         SELECT 
+            txid,
             vout as out_index,
             value as amount,
             addresses as address
@@ -169,6 +170,7 @@ if __name__ == "__main__":
         # Query inputs and their referenced outputs
         vins_query = """
         SELECT 
+            i.prev_txid,
             p_o.value as amount,
             p_o.addresses as address
         FROM tx_in i
@@ -180,16 +182,18 @@ if __name__ == "__main__":
         # Process outputs
         vouts_list = [
             {
-                "address": vout[2] if vout[2] else None,
-                "amount": vout[1] if vout[1] else 0
+                "address": vout[3] if vout[3] else None,
+                "amount": vout[2] if vout[2] else 0,
+                "tx_id": vout[0]
             } for vout in vouts
         ]
 
         # Process inputs
         vins_list = [
             {
-                "address": vin[1] if vin[1] else None,
-                "amount": vin[0] if vin[0] else 0
+                "address": vin[2] if vin[2] else None,
+                "amount": vin[1] if vin[1] else 0,
+                "tx_id": vin[0] if vin[0] else None
             } for vin in vins
         ]
 
