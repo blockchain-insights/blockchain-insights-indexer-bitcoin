@@ -154,16 +154,20 @@ if __name__ == "__main__":
         if terminate_event.is_set():
             break
 
-        # Query outputs for this transaction
+        # Query outputs for this transaction and join with spending transactions
         vouts_query = """
         SELECT 
-            txid,
-            vout as out_index,
-            value as amount,
-            addresses as address
-        FROM tx_out 
-        WHERE txid = ?
-        ORDER BY vout;
+            o.txid,
+            o.vout as out_index,
+            o.value as amount,
+            o.addresses as address,
+            i.txid as spending_tx_id
+        FROM tx_out o
+        LEFT JOIN tx_in i 
+            ON i.prev_txid = o.txid 
+            AND i.prev_vout = o.vout
+        WHERE o.txid = ?
+        ORDER BY o.vout;
         """
         vouts = con.execute(vouts_query, [tx_id]).fetchall()
         
@@ -201,7 +205,7 @@ if __name__ == "__main__":
             {
                 "address": vout[3] if vout[3] else None,
                 "amount": vout[2] if vout[2] else 0,
-                "tx_id": None  # Output tx_id should be null as it's not a reference
+                "tx_id": vout[4] if vout[4] else None  # spending_tx_id from the join
             } for vout in vouts
         ]
 
