@@ -44,7 +44,7 @@ def convert_csv_to_parquet():
     tx_in_dtypes = {
         'txid': str,
         'prev_txid': str,
-        'prev_vout': 'Int64',
+        'prev_vout': 'Int64',  # Using Int64 for large values like 4294967295
         'scriptsig': str,
         'sequence': 'Int64'
     }

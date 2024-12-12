@@ -40,7 +40,7 @@ class TransactionOutputCache:
                          columns={{
                              'txid': 'VARCHAR',
                              'prev_txid': 'VARCHAR',
-                             'prev_vout': 'INTEGER',
+                             'prev_vout': 'BIGINT',
                              'scriptsig': 'VARCHAR',
                              'sequence': 'BIGINT'
                          }});
