@@ -5,6 +5,7 @@ import duckdb
 import json
 import time
 import pandas as pd
+import pyarrow as pa
 from datetime import datetime
 from loguru import logger
 
