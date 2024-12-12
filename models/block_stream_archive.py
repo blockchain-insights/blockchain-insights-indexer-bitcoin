@@ -200,22 +200,14 @@ if __name__ == "__main__":
         """
         is_coinbase = con.execute(coinbase_query, [tx_id, '0' * 64, tx_id]).fetchone()[0]
 
-        # Process outputs
-        # Debug print raw vouts data
-        logger.debug(f"Raw VOUT data for tx {tx_id}: {vouts}")
-        
         vouts_list = [
             {
                 "address": vout[3] if vout[3] else None,
                 "amount": vout[2] if vout[2] else 0,
-                "tx_id": vout[4]  # spending_tx_id from the join
+                "tx_id": vout[0]
             } for vout in vouts
         ]
         
-        # Debug print processed vouts
-        logger.debug(f"Processed VOUTs for tx {tx_id}: {vouts_list}")
-
-        # Process inputs
         if is_coinbase:
             vins_list = []  # Coinbase transactions have no real inputs
         else:
