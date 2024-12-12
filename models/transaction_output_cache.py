@@ -4,7 +4,7 @@ from loguru import logger
 
 
 class TransactionOutputCache:
-    def __init__(self, csv_dir: str = 'csv', block_ranges: str = '1-99999'):
+    def __init__(self, csv_dir: str = '../csv', block_ranges: str = '1-99999'):
         self.conn = duckdb.connect(':memory:')
         self._initialize_tables(csv_dir, block_ranges)
 
