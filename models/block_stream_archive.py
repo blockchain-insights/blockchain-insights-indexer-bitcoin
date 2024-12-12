@@ -157,67 +157,44 @@ if __name__ == "__main__":
         con.execute("CREATE INDEX idx_tx_out_txid ON tx_out(txid)")
         con.execute("CREATE INDEX idx_tx_out_composite ON tx_out(txid, vout)")
 
-        # Create materialized view for all transaction data
-        con.execute("""
-            CREATE TABLE tx_data AS
-            SELECT 
-                t.txid AS tx_id,
-                t.index AS tx_index,
-                b.height AS block_height,
-                b.time AS timestamp,
-                o.vout as out_index,
-                o.value as out_amount,
-                o.addresses as out_address,
-                i.prev_txid as in_txid,
-                i.prev_vout as in_vout,
-                p_o.value as in_amount,
-                p_o.addresses as in_address
-            FROM transactions t
-            JOIN blocks b ON t.block_hash = b.hash
-            LEFT JOIN tx_out o ON t.txid = o.txid
-            LEFT JOIN tx_in i ON t.txid = i.txid
-            LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
-            ORDER BY b.height, t.index, o.vout, i.prev_vout
-        """)
-        con.execute("CREATE INDEX idx_tx_data_txid ON tx_data(tx_id)")
     except Exception as e:
         logger.warning("Index creation failed or not supported: {}", e)
 
-    # Query to get all transaction data at once
+    # Query to get all transactions
     tx_query = """
     SELECT DISTINCT
-        tx_id,
-        tx_index,
-        block_height,
-        timestamp
-    FROM tx_data
-    ORDER BY block_height, tx_index
+        t.txid as tx_id,
+        t.index as tx_index,
+        b.height as block_height,
+        b.time as timestamp
+    FROM transactions t
+    JOIN blocks b ON t.block_hash = b.hash
+    ORDER BY b.height, t.index
     """
 
     # SQL query templates for inputs and outputs
     vouts_query = """
-        SELECT DISTINCT
-            tx_id,
-            out_index,
-            out_amount as amount,
-            out_address as address
-        FROM tx_data
-        WHERE tx_id = '{}'
-        AND out_index IS NOT NULL
-        ORDER BY out_index
+        SELECT 
+            txid as tx_id,
+            vout as out_index,
+            value as amount,
+            addresses as address
+        FROM tx_out
+        WHERE txid = '{}'
+        ORDER BY vout
     """
 
     vins_query = """
-        SELECT DISTINCT
-            in_txid as prev_txid,
-            in_vout as prev_vout,
-            in_amount as amount,
-            in_address as address,
-            tx_id as current_txid
-        FROM tx_data
-        WHERE tx_id = '{}'
-        AND in_txid IS NOT NULL
-        ORDER BY in_vout
+        SELECT 
+            i.prev_txid,
+            i.prev_vout,
+            o.value as amount,
+            o.addresses as address,
+            i.txid as current_txid
+        FROM tx_in i
+        LEFT JOIN tx_out o ON o.txid = i.prev_txid AND o.vout = i.prev_vout
+        WHERE i.txid = '{}'
+        ORDER BY i.prev_vout
     """
 
     # Process transactions in batches
