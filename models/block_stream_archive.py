@@ -144,8 +144,8 @@ if __name__ == "__main__":
     ORDER BY b.height, t.index;
     """
 
-    # Prepare statements
-    vouts_stmt = con.prepare("""
+    # SQL query templates
+    vouts_query = """
         SELECT 
             o.txid,
             o.vout as out_index,
@@ -156,11 +156,11 @@ if __name__ == "__main__":
         LEFT JOIN tx_in i 
             ON o.txid = i.prev_txid 
             AND o.vout = i.prev_vout
-        WHERE o.txid = ?
+        WHERE o.txid = '{}'
         ORDER BY o.vout;
-    """)
+    """
 
-    vins_stmt = con.prepare("""
+    vins_query = """
         SELECT 
             i.prev_txid,
             i.prev_vout,
@@ -171,19 +171,19 @@ if __name__ == "__main__":
         LEFT JOIN tx_out p_o 
             ON p_o.txid = i.prev_txid 
             AND p_o.vout = i.prev_vout
-        WHERE i.txid = ?
+        WHERE i.txid = '{}'
         ORDER BY i.prev_vout;
-    """)
+    """
 
-    coinbase_stmt = con.prepare("""
+    coinbase_query = """
         SELECT COUNT(*) = 1 AND COUNT(*) = (
             SELECT COUNT(*)
             FROM tx_in
-            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
+            WHERE txid = '{}' AND prev_txid = '{}' AND prev_vout = 4294967295
         )
         FROM tx_in
-        WHERE txid = ?;
-    """)
+        WHERE txid = '{}';
+    """
 
     # Process transactions in batches
     BATCH_SIZE = 1000
@@ -205,10 +205,10 @@ if __name__ == "__main__":
             if terminate_event.is_set():
                 break
 
-        # Execute prepared statements for this transaction
-        vouts = vouts_stmt.execute([tx_id]).fetchall()
-        vins = vins_stmt.execute([tx_id]).fetchall()
-        is_coinbase = coinbase_stmt.execute([tx_id, '0' * 64, tx_id]).fetchone()[0]
+        # Execute queries for this transaction
+        vouts = con.execute(vouts_query.format(tx_id)).fetchall()
+        vins = con.execute(vins_query.format(tx_id)).fetchall()
+        is_coinbase = con.execute(coinbase_query.format(tx_id, '0' * 64, tx_id)).fetchone()[0]
 
         vouts_list = [
             {
