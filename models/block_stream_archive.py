@@ -205,51 +205,10 @@ if __name__ == "__main__":
         if terminate_event.is_set():
             break
 
-        # Query outputs for this transaction and join with spending transactions
-        vouts_query = """
-        SELECT 
-            o.txid,
-            o.vout as out_index,
-            o.value as amount,
-            o.addresses as address,
-            COALESCE(i.txid, NULL) as spending_tx_id
-        FROM tx_out o
-        LEFT JOIN tx_in i 
-            ON o.txid = i.prev_txid 
-            AND o.vout = i.prev_vout
-        WHERE o.txid = ?
-        ORDER BY o.vout;
-        """
-        vouts = con.execute(vouts_query, [tx_id]).fetchall()
-        
-        # Query inputs and their referenced outputs with proper joining
-        vins_query = """
-        SELECT 
-            i.prev_txid,
-            i.prev_vout,
-            p_o.value as amount,
-            p_o.addresses as address,
-            i.txid as current_txid
-        FROM tx_in i
-        LEFT JOIN tx_out p_o 
-            ON p_o.txid = i.prev_txid 
-            AND p_o.vout = i.prev_vout
-        WHERE i.txid = ?
-        ORDER BY i.prev_vout;
-        """
-        vins = con.execute(vins_query, [tx_id]).fetchall()
-
-        # Check if transaction is coinbase
-        coinbase_query = """
-        SELECT COUNT(*) = 1 AND COUNT(*) = (
-            SELECT COUNT(*)
-            FROM tx_in
-            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
-        )
-        FROM tx_in
-        WHERE txid = ?;
-        """
-        is_coinbase = con.execute(coinbase_query, [tx_id, '0' * 64, tx_id]).fetchone()[0]
+        # Execute prepared statements for this transaction
+        vouts = vouts_stmt.execute([tx_id]).fetchall()
+        vins = vins_stmt.execute([tx_id]).fetchall()
+        is_coinbase = coinbase_stmt.execute([tx_id, '0' * 64, tx_id]).fetchone()[0]
 
         vouts_list = [
             {
