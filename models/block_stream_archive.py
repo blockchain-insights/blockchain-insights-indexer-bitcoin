@@ -167,15 +167,20 @@ if __name__ == "__main__":
         """
         vouts = con.execute(vouts_query, [tx_id]).fetchall()
         
-        # Query inputs and their referenced outputs
+        # Query inputs and their referenced outputs with proper joining
         vins_query = """
         SELECT 
             i.prev_txid,
+            i.prev_vout,
             p_o.value as amount,
-            p_o.addresses as address
+            p_o.addresses as address,
+            i.txid as current_txid
         FROM tx_in i
-        LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
-        WHERE i.txid = ?;
+        LEFT JOIN tx_out p_o 
+            ON p_o.txid = i.prev_txid 
+            AND p_o.vout = i.prev_vout
+        WHERE i.txid = ?
+        ORDER BY i.prev_vout;
         """
         vins = con.execute(vins_query, [tx_id]).fetchall()
 
@@ -206,9 +211,10 @@ if __name__ == "__main__":
         else:
             vins_list = [
                 {
-                    "address": vin[2] if vin[2] else None,
-                    "amount": vin[1] if vin[1] else 0,
-                    "tx_id": vin[0] if vin[0] else None
+                    "address": vin[3] if vin[3] else None,
+                    "amount": vin[2] if vin[2] else 0,
+                    "tx_id": vin[0] if vin[0] else None,
+                    "vout": vin[1] if vin[1] else None
                 } for vin in vins
             ]
 
