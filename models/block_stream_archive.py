@@ -174,17 +174,13 @@ if __name__ == "__main__":
     # SQL query templates
     vouts_query = """
         SELECT 
-            o.txid,
-            o.vout as out_index,
-            o.value as amount,
-            o.addresses as address,
-            COALESCE(i.txid, NULL) as spending_tx_id
-        FROM tx_out o
-        LEFT JOIN tx_in i 
-            ON o.txid = i.prev_txid 
-            AND o.vout = i.prev_vout
-        WHERE o.txid = '{}'
-        ORDER BY o.vout
+            txid,
+            vout as out_index,
+            value as amount,
+            addresses as address
+        FROM tx_out
+        WHERE txid = '{}'
+        ORDER BY vout
     """
 
     vins_query = """
