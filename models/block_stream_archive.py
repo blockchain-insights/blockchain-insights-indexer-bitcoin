@@ -197,13 +197,13 @@ if __name__ == "__main__":
             break
             
         for tx in transactions:
-        if terminate_event.is_set():
-            break
+            if terminate_event.is_set():
+                break
 
-        tx_id, tx_index, block_height, timestamp = tx
-        
-        if terminate_event.is_set():
-            break
+            tx_id, tx_index, block_height, timestamp = tx
+            
+            if terminate_event.is_set():
+                break
 
         # Execute prepared statements for this transaction
         vouts = vouts_stmt.execute([tx_id]).fetchall()
