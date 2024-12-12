@@ -190,7 +190,7 @@ if __name__ == "__main__":
     offset = 0
     
     while True:
-        batch_query = f"{tx_query} LIMIT {BATCH_SIZE} OFFSET {offset}"
+        batch_query = f"SELECT * FROM ({tx_query}) AS sub LIMIT {BATCH_SIZE} OFFSET {offset}"
         transactions = con.execute(batch_query).fetchall()
         
         if not transactions:
