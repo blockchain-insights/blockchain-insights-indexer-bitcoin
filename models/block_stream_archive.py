@@ -40,7 +40,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    con = duckdb.connect()
+    con = duckdb.connect(":memory:")
 
     # Create tables with updated schemas
     # blocks: hash;height;version;size;prev_block_hash;merkleroot;time;bits;nonce
