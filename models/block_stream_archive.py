@@ -4,14 +4,90 @@ import threading
 import duckdb
 import json
 import time
+import pandas as pd
 from datetime import datetime
-
 from loguru import logger
 
-blocks_csv = 'csv/blocks-1-99999.csv'
-transactions_csv = 'csv/transactions-1-99999.csv'
-tx_in_csv = 'csv/tx_in-1-99999.csv'
-tx_out_csv = 'csv/tx_out-1-99999.csv'
+# Define input CSV and output Parquet paths
+CSV_DIR = 'csv'
+PARQUET_DIR = 'parquet'
+BLOCK_RANGES = '1-99999'
+
+blocks_parquet = f'{PARQUET_DIR}/blocks-{BLOCK_RANGES}.parquet'
+transactions_parquet = f'{PARQUET_DIR}/transactions-{BLOCK_RANGES}.parquet'
+tx_in_parquet = f'{PARQUET_DIR}/tx_in-{BLOCK_RANGES}.parquet'
+tx_out_parquet = f'{PARQUET_DIR}/tx_out-{BLOCK_RANGES}.parquet'
+
+def convert_csv_to_parquet():
+    """Convert CSV files to Parquet format if they don't exist"""
+    # Define schema types for each table
+    blocks_dtypes = {
+        'hash': str,
+        'height': int,
+        'version': int,
+        'size': int,
+        'prev_block_hash': str,
+        'merkleroot': str,
+        'time': int,
+        'bits': int,
+        'nonce': 'Int64'
+    }
+    
+    transactions_dtypes = {
+        'txid': str,
+        'block_hash': str,
+        'version': int,
+        'index': int
+    }
+    
+    tx_in_dtypes = {
+        'txid': str,
+        'prev_txid': str,
+        'prev_vout': 'Int64',
+        'scriptsig': str,
+        'sequence': 'Int64'
+    }
+    
+    tx_out_dtypes = {
+        'txid': str,
+        'vout': int,
+        'value': 'Int64',
+        'scriptpubkey': str,
+        'addresses': str
+    }
+    
+    # Create parquet directory if it doesn't exist
+    import os
+    os.makedirs(PARQUET_DIR, exist_ok=True)
+    
+    # Convert each CSV to Parquet
+    if not os.path.exists(blocks_parquet):
+        df = pd.read_csv(f'{CSV_DIR}/blocks-{BLOCK_RANGES}.csv', 
+                        names=blocks_dtypes.keys(),
+                        dtype=blocks_dtypes,
+                        sep=';')
+        df.to_parquet(blocks_parquet, index=False)
+        
+    if not os.path.exists(transactions_parquet):
+        df = pd.read_csv(f'{CSV_DIR}/transactions-{BLOCK_RANGES}.csv',
+                        names=transactions_dtypes.keys(),
+                        dtype=transactions_dtypes,
+                        sep=';')
+        df.to_parquet(transactions_parquet, index=False)
+        
+    if not os.path.exists(tx_in_parquet):
+        df = pd.read_csv(f'{CSV_DIR}/tx_in-{BLOCK_RANGES}.csv',
+                        names=tx_in_dtypes.keys(),
+                        dtype=tx_in_dtypes,
+                        sep=';')
+        df.to_parquet(tx_in_parquet, index=False)
+        
+    if not os.path.exists(tx_out_parquet):
+        df = pd.read_csv(f'{CSV_DIR}/tx_out-{BLOCK_RANGES}.csv',
+                        names=tx_out_dtypes.keys(),
+                        dtype=tx_out_dtypes,
+                        sep=';')
+        df.to_parquet(tx_out_parquet, index=False)
 
 if __name__ == "__main__":
     # Setup logging
@@ -42,84 +118,28 @@ if __name__ == "__main__":
 
     con = duckdb.connect(":memory:")
 
-    # Create tables with updated schemas
-    # blocks: hash;height;version;size;prev_block_hash;merkleroot;time;bits;nonce
+    # Convert CSV files to Parquet if needed
+    convert_csv_to_parquet()
+    
+    # Create tables from Parquet files
     con.execute(f"""
         CREATE OR REPLACE TABLE blocks AS
-        SELECT * FROM read_csv('{blocks_csv}',
-          delim=';',
-          quote='',
-          escape='',
-          header=false,
-          auto_detect=false,
-          columns={{
-            'hash': 'VARCHAR',
-            'height': 'INTEGER',
-            'version': 'INTEGER',
-            'size': 'INTEGER',
-            'prev_block_hash': 'VARCHAR',
-            'merkleroot': 'VARCHAR',
-            'time': 'INTEGER',
-            'bits': 'INTEGER',
-            'nonce': 'BIGINT'
-          }}
-        );
+        SELECT * FROM parquet_scan('{blocks_parquet}');
     """)
 
-    # transactions: txid;block_hash;version;index
     con.execute(f"""
         CREATE OR REPLACE TABLE transactions AS
-        SELECT * FROM read_csv('{transactions_csv}',
-          delim=';',
-          quote='',
-          escape='',
-          header=false,
-          auto_detect=false,
-          columns={{
-            'txid': 'VARCHAR',
-            'block_hash': 'VARCHAR',
-            'version': 'INTEGER',
-            'index': 'INTEGER'
-          }}
-        );
+        SELECT * FROM parquet_scan('{transactions_parquet}');
     """)
 
-    # tx_in: txid;prev_txid;prev_vout;scriptsig;sequence
     con.execute(f"""
         CREATE OR REPLACE TABLE tx_in AS
-        SELECT * FROM read_csv('{tx_in_csv}',
-          delim=';',
-          quote='',
-          escape='',
-          header=false,
-          auto_detect=false,
-          columns={{
-            'txid': 'VARCHAR',
-            'prev_txid': 'VARCHAR',
-            'prev_vout': 'BIGINT',
-            'scriptsig': 'VARCHAR',
-            'sequence': 'BIGINT'
-          }}
-        );
+        SELECT * FROM parquet_scan('{tx_in_parquet}');
     """)
 
-    # tx_out: txid;vout;value;scriptpubkey;addresses
     con.execute(f"""
         CREATE OR REPLACE TABLE tx_out AS
-        SELECT * FROM read_csv('{tx_out_csv}',
-          delim=';',
-          quote='',
-          escape='',
-          header=false,
-          auto_detect=false,
-          columns={{
-            'txid': 'VARCHAR',
-            'vout': 'INTEGER',
-            'value': 'BIGINT',
-            'scriptpubkey': 'VARCHAR',
-            'addresses': 'VARCHAR'
-          }}
-        );
+        SELECT * FROM parquet_scan('{tx_out_parquet}');
     """)
 
     # Create optimized indexes for joins
