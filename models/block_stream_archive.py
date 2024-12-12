@@ -161,11 +161,11 @@ if __name__ == "__main__":
             o.vout as out_index,
             o.value as amount,
             o.addresses as address,
-            i.txid as spending_tx_id
+            COALESCE(i.txid, NULL) as spending_tx_id
         FROM tx_out o
         LEFT JOIN tx_in i 
-            ON i.prev_txid = o.txid 
-            AND i.prev_vout = o.vout
+            ON o.txid = i.prev_txid 
+            AND o.vout = i.prev_vout
         WHERE o.txid = ?
         ORDER BY o.vout;
         """
