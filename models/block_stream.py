@@ -13,8 +13,8 @@ from loguru import logger
 from typing import List
 from models.block_range_partitioner import BlockRangePartitioner
 from models.block_stream_state import BlockStreamStateManager
-from models.transaction_output_cache import TransactionOutputCache
 from node.node import BitcoinNode
+from node.node_utils import derive_address
 
 
 class BlockStreamProducer:
@@ -28,11 +28,6 @@ class BlockStreamProducer:
         self.admin_client = AdminClient(kafka_config)
         self.ensure_topic_exists()
         self.terminate_event = terminate_event
-        self.tx_cache = TransactionOutputCache(
-            db_url=db_url,
-            bitcoin_node=bitcoin_node,
-            terminate_event=terminate_event,
-        )
 
         self.duplicate_tx = [
             'd5d27987d2a3dfc724e359870c6644b40e497bdc0589a033220fe15429d88599',
@@ -66,7 +61,7 @@ class BlockStreamProducer:
             logger.error(f"Error managing topic", error=e, trb=traceback.format_exc())
             raise
 
-    def process_transaction(self, tx: dict, block: dict) -> dict:
+    def process_transaction(self, tx: dict, block: dict, tx_cache: dict) -> dict:
         """Process a single transaction with cached lookups"""
         is_coinbase = len(tx["vin"]) == 1 and "coinbase" in tx["vin"][0]
 
@@ -74,7 +69,8 @@ class BlockStreamProducer:
         in_amount_by_address = {}
         if not is_coinbase:
             for vin in tx["vin"]:
-                address, amount = self.tx_cache.get_output(vin["txid"], vin["vout"])
+                in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
+                address, amount = tx_cache.get(f"{vin['txid']}-{vin['vout']}")
                 in_amount_by_address[address] = in_amount_by_address.get(address, 0) + amount
 
         # Process outputs
@@ -83,7 +79,12 @@ class BlockStreamProducer:
             if vout["scriptPubKey"].get("type") in ["nonstandard", "nulldata"]:
                 continue
 
-            address = self.tx_cache._derive_address(vout["scriptPubKey"])
+            script_pubkey = vout["scriptPubKey"]
+            script_type = script_pubkey.get("type", "unknown")
+            address = derive_address(script_pubkey, script_pubkey.get("asm", ""))
+            if address.startswith("unknown-") or address.startswith("UNKNOWN_"):
+                raise ValueError(f"Could not derive address for script type {script_type}: {script_pubkey}")
+
             amount = int(Decimal(vout["value"]) * 100000000)
             out_amount_by_address[address] = out_amount_by_address.get(address, 0) + amount
 
@@ -121,12 +122,20 @@ class BlockStreamProducer:
             transactions = []
             start_time = time.time()
 
+            tx_ids = []
+            for tx in block["tx"]:
+                for vin in tx["vin"]:
+                    if "txid" in vin and vin["txid"] not in tx_ids:
+                        tx_ids.append((vin["txid"], vin["vout"]))
+            ## TODO: move this away from this function, to upper level where we have a block window !!
+            tx_cache = bitcoin_node.get_addresses_and_amounts_by_txouts(tx_ids)
+
             for tx in block["tx"]:
                 if tx["txid"] in self.duplicate_tx and block['height'] in self.duplicate_block:
                     logger.warning(f"Skipping duplicate transaction {tx['txid']}")
                     continue
 
-                transaction = self.process_transaction(tx, block)
+                transaction = self.process_transaction(tx, block, tx_cache)
                 transactions.append(transaction)
 
             end_time = time.time()
@@ -176,8 +185,6 @@ class BlockStreamProducer:
     def close(self):
         """Cleanup resources"""
         try:
-            if self.tx_cache:
-                self.tx_cache.close()
             if self.producer:
                 self.producer.flush()
             if self.admin_client:
@@ -215,11 +222,12 @@ class BlockStream:
             # Get blocks for window
             end_height = start_height + self.window_size - 1
             blocks = self.bitcoin_node.get_blocks_by_height_range(start_height, end_height)
+            #TDODO: parse block data here !!!
 
             if not blocks:
                 return False
 
-            self.producer.tx_cache.cache_block(blocks)
+            #self.producer.tx_cache.cache_block(blocks)
             #for block in blocks:
             #    for tx in block["tx"]:
             #        self.producer.tx_cache.cache_transaction(block['height'], tx)

@@ -198,15 +198,23 @@ class BitcoinNode(Node):
         input_amounts = {}  # input amounts by address in satoshi
         output_amounts = {}  # output amounts by address in satoshi
 
-        for vin in tx.vins:
-            if vin.tx_id == 0:
+        for vin in tx['vin']:
+            if vin['txid'] == 0:
                 continue
-            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin.tx_id, str(vin.vout_id))
+            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin['txid'], str(vin['vout']))
             input_amounts[address] = input_amounts.get(address, 0) + amount
 
-        for vout in tx.vouts:
-            amount = vout.value_satoshi
-            address = vout.address or f"unknown-{tx.tx_id}"
+        for vout in tx['vout']:
+            amount = vout['value'] * SATOSHI
+
+            script_type = vout["scriptPubKey"].get("type", "")
+            if "nonstandard" in script_type or script_type == "nulldata":
+                continue
+
+            script_pub_key_asm = vout["scriptPubKey"].get("asm", "")
+            address = vout['scriptPubKey'].get('address', f"unknown-{tx['txid']}")
+
+            address = vout['address'] or f"unknown-{tx['txid']}"
             output_amounts[address] = output_amounts.get(address, 0) + amount
 
         for address in input_amounts:
@@ -284,7 +292,12 @@ class BitcoinNode(Node):
         missing_txouts = []
 
         for txn_id, vout_id in txouts:
-                missing_txouts.append((txn_id, vout_id))
+            missing_txouts.append((txn_id, vout_id))
+            #if (txn_id, vout_id) in self.tx_out_hash_table[txn_id[:3]]:
+            #   address, amount = self.tx_out_hash_table[txn_id[:3]][(txn_id, vout_id)]
+            #  results[(txn_id, vout_id)] = (address, int(amount))
+            #else:
+            #   missing_txouts.append((txn_id, vout_id))
 
         if missing_txouts:
             unique_tx_ids = list(set(tx_id for tx_id, _ in missing_txouts))
@@ -299,7 +312,7 @@ class BitcoinNode(Node):
                     vout = next((x for x in tx_data['vout'] if str(x['n']) == str(vout_id)), None)
 
                     if vout:
-                        amount = int(vout['value'] * 100000000)
+                        amount = int(vout['value'] * SATOSHI)
                         address = derive_address(vout["scriptPubKey"],
                                                  vout["scriptPubKey"].get("asm", ""))
                     else:

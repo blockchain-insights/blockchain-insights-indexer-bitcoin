@@ -209,7 +209,7 @@ class VIN:
 
 
 getcontext().prec = 28
-SATOSHI = Decimal("100000000")
+SATOSHI = 100000000
 
 
 def parse_block_data(block_data):
