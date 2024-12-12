@@ -205,70 +205,71 @@ if __name__ == "__main__":
             if terminate_event.is_set():
                 break
 
-        # Execute queries for this transaction
-        vouts = con.execute(vouts_query.format(tx_id)).fetchall()
-        vins = con.execute(vins_query.format(tx_id)).fetchall()
-        is_coinbase = con.execute(coinbase_query.format(tx_id, '0' * 64, tx_id)).fetchone()[0]
+            # Execute queries for this transaction
+            vouts = con.execute(vouts_query.format(tx_id)).fetchall()
+            vins = con.execute(vins_query.format(tx_id)).fetchall()
+            is_coinbase = con.execute(coinbase_query.format(tx_id, '0' * 64, tx_id)).fetchone()[0]
 
-        vouts_list = [
-            {
-                "address": vout[3] if vout[3] else None,
-                "amount": vout[2] if vout[2] else 0,
-                "tx_id": vout[0]
-            } for vout in vouts
-        ]
-        
-        if is_coinbase:
-            vins_list = []  # Coinbase transactions have no real inputs
-        else:
-            vins_list = [
+            vouts_list = [
                 {
-                    "address": vin[3] if vin[3] else None,
-                    "amount": vin[2] if vin[2] else 0,
-                    "tx_id": vin[0] if vin[0] else None,
-                    "vout": vin[1] if vin[1] else None
-                } for vin in vins
+                    "address": vout[3] if vout[3] else None,
+                    "amount": vout[2] if vout[2] else 0,
+                    "tx_id": vout[0]
+                } for vout in vouts
             ]
+            
+            if is_coinbase:
+                vins_list = []  # Coinbase transactions have no real inputs
+            else:
+                vins_list = [
+                    {
+                        "address": vin[3] if vin[3] else None,
+                        "amount": vin[2] if vin[2] else 0,
+                        "tx_id": vin[0] if vin[0] else None,
+                        "vout": vin[1] if vin[1] else None
+                    } for vin in vins
+                ]
+
+            # Calculate totals
+            in_total_amount = sum(vin["amount"] for vin in vins_list)
+            out_total_amount = sum(vout["amount"] for vout in vouts_list)
+
+            # If coinbase and no input amount, set in_total_amount = out_total_amount
+            if is_coinbase and in_total_amount == 0:
+                in_total_amount = out_total_amount
+
+            # Format final message
+            message = {
+                "tx_id": tx_id,
+                "tx_index": tx_index,
+                "timestamp": timestamp,
+                "block_height": block_height,
+                "is_coinbase": is_coinbase,
+                "in_total_amount": in_total_amount,
+                "out_total_amount": out_total_amount,
+                "vins": [
+                    {
+                        "address": vin["address"],
+                        "amount": vin["amount"],
+                        "tx_id": vin["tx_id"]
+                    } for vin in vins_list
+                ],
+                "vouts": [
+                    {
+                        "address": vout["address"],
+                        "amount": vout["amount"],
+                        "tx_id": vout["tx_id"]
+                    } for vout in vouts_list
+                ],
+                "size": None,
+                "vsize": None,
+                "weight": None
+            }
+
+            print(json.dumps(message))
+            sys.stdout.flush()
 
 
-        # Calculate totals
-        in_total_amount = sum(vin["amount"] for vin in vins_list)
-        out_total_amount = sum(vout["amount"] for vout in vouts_list)
-
-        # If coinbase and no input amount, set in_total_amount = out_total_amount
-        if is_coinbase and in_total_amount == 0:
-            in_total_amount = out_total_amount
-
-        # Format final message
-        message = {
-            "tx_id": tx_id,
-            "tx_index": tx_index,
-            "timestamp": timestamp,
-            "block_height": block_height,
-            "is_coinbase": is_coinbase,
-            "in_total_amount": in_total_amount,
-            "out_total_amount": out_total_amount,
-            "vins": [
-                {
-                    "address": vin["address"],
-                    "amount": vin["amount"],
-                    "tx_id": vin["tx_id"]
-                } for vin in vins_list
-            ],
-            "vouts": [
-                {
-                    "address": vout["address"],
-                    "amount": vout["amount"],
-                    "tx_id": vout["tx_id"]
-                } for vout in vouts_list
-            ],
-            "size": None,
-            "vsize": None,
-            "weight": None
-        }
-
-        print(json.dumps(message))
-        sys.stdout.flush()
-
-
+        offset += BATCH_SIZE
+        
     logger.info("Processing completed or terminated.")
