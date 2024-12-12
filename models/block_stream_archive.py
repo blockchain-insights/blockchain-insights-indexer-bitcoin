@@ -130,107 +130,83 @@ if __name__ == "__main__":
     except Exception as e:
         logger.warning("Index creation failed or not supported: {}", e)
 
-    # One big query:
-    # Join transactions with blocks by block_hash = hash
-    # tx_in for inputs, tx_out for outputs
-    # p_o for previous outputs referenced by inputs
-    # Since we don't have block_height in transactions, we get height and time from blocks
-    # We have no size/vsize in the data, set them to None.
-    query = """
-    SELECT
+    # Query to get transactions joined with blocks
+    tx_query = """
+    SELECT 
         t.txid AS tx_id,
         t.index AS tx_index,
         b.height AS block_height,
-        b.time AS timestamp,
-
-        -- We don't have size/vsize from CSV, set them to NULL
-        NULL::BIGINT AS size,
-        NULL::BIGINT AS vsize,
-        NULL::BIGINT AS weight,
-
-        i.prev_txid,
-        i.prev_vout,
-        i.scriptsig,
-        i.sequence,
-
-        p_o.value AS in_value,
-        p_o.addresses AS in_address,
-
-        o.vout AS out_index,
-        o.value AS out_value,
-        o.addresses AS out_address
+        b.time AS timestamp
     FROM transactions t
     JOIN blocks b ON t.block_hash = b.hash
-    LEFT JOIN tx_in i ON i.txid = t.txid
-    LEFT JOIN tx_out o ON o.txid = t.txid
-    LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
     ORDER BY b.height, t.index;
     """
 
-    rows = con.execute(query).fetchall()
-
-    # Group by tx_id
-    transactions_dict = {}
-    for r in rows:
+    transactions = con.execute(tx_query).fetchall()
+    
+    # Process each transaction
+    for tx in transactions:
         if terminate_event.is_set():
             break
 
-        (tx_id, tx_index, block_height, timestamp,
-         size, vsize, weight,
-         prev_txid, prev_vout, scriptsig, sequence,
-         in_value, in_address,
-         out_index, out_value, out_address) = r
-
-        if tx_id not in transactions_dict:
-            transactions_dict[tx_id] = {
-                "tx_id": tx_id,
-                "tx_index": tx_index,
-                "timestamp": timestamp,
-                "block_height": block_height,
-                "size": size,
-                "vsize": vsize,
-                "weight": weight,
-                "vins": [],
-                "vouts": []
-            }
-
-        tx_data = transactions_dict[tx_id]
-
-        # Handle inputs
-        if prev_txid is not None:
-            tx_data["vins"].append({
-                "tx_id": tx_id,
-                "address": in_address if in_address else None,
-                "amount": in_value if in_value else 0,
-                "prev_txid": prev_txid,
-                "prev_vout": prev_vout
-            })
-
-        # Handle outputs
-        if out_index is not None:
-            tx_data["vouts"].append({
-                "tx_id": tx_id,
-                "address": out_address if out_address else None,
-                "amount": out_value if out_value else 0
-            })
-
-    # Finalize messages
-    for tx_id, tx_data in transactions_dict.items():
+        tx_id, tx_index, block_height, timestamp = tx
+        
         if terminate_event.is_set():
             break
 
-        vins_list = tx_data["vins"]
-        vouts_list = tx_data["vouts"]
+        # Query outputs for this transaction
+        vouts_query = """
+        SELECT 
+            vout as out_index,
+            value as amount,
+            addresses as address
+        FROM tx_out 
+        WHERE txid = ?
+        ORDER BY vout;
+        """
+        vouts = con.execute(vouts_query, [tx_id]).fetchall()
+        
+        # Query inputs and their referenced outputs
+        vins_query = """
+        SELECT 
+            i.prev_txid,
+            i.prev_vout,
+            p_o.value as amount,
+            p_o.addresses as address
+        FROM tx_in i
+        LEFT JOIN tx_out p_o ON p_o.txid = i.prev_txid AND p_o.vout = i.prev_vout
+        WHERE i.txid = ?
+        ORDER BY i.prev_vout;
+        """
+        vins = con.execute(vins_query, [tx_id]).fetchall()
 
-        # Determine is_coinbase
-        if vins_list:
-            is_coinbase = all(
-                vin["prev_txid"] == '0' * 64 and vin["prev_vout"] == 4294967295
-                for vin in vins_list
-            )
-        else:
-            is_coinbase = False
+        # Process outputs
+        vouts_list = [
+            {
+                "tx_id": tx_id,
+                "address": vout[2] if vout[2] else None,
+                "amount": vout[1] if vout[1] else 0
+            } for vout in vouts
+        ]
 
+        # Process inputs
+        vins_list = [
+            {
+                "tx_id": tx_id,
+                "address": vin[3] if vin[3] else None,
+                "amount": vin[2] if vin[2] else 0,
+                "prev_txid": vin[0],
+                "prev_vout": vin[1]
+            } for vin in vins
+        ]
+
+        # Determine if coinbase
+        is_coinbase = bool(vins_list) and all(
+            vin["prev_txid"] == '0' * 64 and vin["prev_vout"] == 4294967295
+            for vin in vins_list
+        )
+
+        # Calculate totals
         in_total_amount = sum(vin["amount"] for vin in vins_list)
         out_total_amount = sum(vout["amount"] for vout in vouts_list)
 
@@ -238,39 +214,36 @@ if __name__ == "__main__":
         if is_coinbase and in_total_amount == 0:
             in_total_amount = out_total_amount
 
-        # Restructure vins and vouts to the requested format
-        final_vins = [
-            {
-                "address": vin["address"],
-                "amount": vin["amount"],
-                "tx_id": vin["tx_id"]
-            } for vin in vins_list
-        ]
-
-        final_vouts = [
-            {
-                "address": vout["address"],
-                "amount": vout["amount"],
-                "tx_id": vout["tx_id"]
-            } for vout in vouts_list
-        ]
-
+        # Format final message
         message = {
-            "tx_id": tx_data["tx_id"],
-            "tx_index": tx_data["tx_index"],
-            "timestamp": tx_data["timestamp"],
-            "block_height": tx_data["block_height"],
+            "tx_id": tx_id,
+            "tx_index": tx_index,
+            "timestamp": timestamp,
+            "block_height": block_height,
             "is_coinbase": is_coinbase,
             "in_total_amount": in_total_amount,
             "out_total_amount": out_total_amount,
-            "vins": final_vins,
-            "vouts": final_vouts,
-            "size": tx_data["size"],  # None because not in CSV
-            "vsize": tx_data["vsize"],  # None because not in CSV
-            "weight": tx_data["weight"]  # None because not in CSV
+            "vins": [
+                {
+                    "address": vin["address"],
+                    "amount": vin["amount"],
+                    "tx_id": vin["tx_id"]
+                } for vin in vins_list
+            ],
+            "vouts": [
+                {
+                    "address": vout["address"],
+                    "amount": vout["amount"],
+                    "tx_id": vout["tx_id"]
+                } for vout in vouts_list
+            ],
+            "size": None,
+            "vsize": None,
+            "weight": None
         }
 
         print(json.dumps(message))
         sys.stdout.flush()
+
 
     logger.info("Processing completed or terminated.")
