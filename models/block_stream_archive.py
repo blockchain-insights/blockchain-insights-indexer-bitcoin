@@ -184,18 +184,21 @@ if __name__ == "__main__":
             {
                 "address": vout[3] if vout[3] else None,
                 "amount": vout[2] if vout[2] else 0,
-                "tx_id": vout[0]
+                "tx_id": None  # Output tx_id should be null as it's not a reference
             } for vout in vouts
         ]
 
         # Process inputs
-        vins_list = [
-            {
-                "address": vin[2] if vin[2] else None,
-                "amount": vin[1] if vin[1] else 0,
-                "tx_id": vin[0] if vin[0] else None
-            } for vin in vins
-        ]
+        if is_coinbase:
+            vins_list = []  # Coinbase transactions have no real inputs
+        else:
+            vins_list = [
+                {
+                    "address": vin[2] if vin[2] else None,
+                    "amount": vin[1] if vin[1] else 0,
+                    "tx_id": vin[0] if vin[0] else None
+                } for vin in vins
+            ]
 
         # Query to check if transaction is coinbase
         coinbase_query = """
