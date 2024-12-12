@@ -120,13 +120,15 @@ if __name__ == "__main__":
         );
     """)
 
-    # Try creating indexes
+    # Create optimized indexes for joins
     try:
         con.execute("CREATE INDEX idx_blocks_hash ON blocks(hash)")
         con.execute("CREATE INDEX idx_transactions_txid ON transactions(txid)")
         con.execute("CREATE INDEX idx_transactions_block_hash ON transactions(block_hash)")
         con.execute("CREATE INDEX idx_tx_in_txid ON tx_in(txid)")
+        con.execute("CREATE INDEX idx_tx_in_prev ON tx_in(prev_txid, prev_vout)")
         con.execute("CREATE INDEX idx_tx_out_txid ON tx_out(txid)")
+        con.execute("CREATE INDEX idx_tx_out_composite ON tx_out(txid, vout)")
     except Exception as e:
         logger.warning("Index creation failed or not supported: {}", e)
 
@@ -142,10 +144,59 @@ if __name__ == "__main__":
     ORDER BY b.height, t.index;
     """
 
-    transactions = con.execute(tx_query).fetchall()
+    # Prepare statements
+    vouts_stmt = con.prepare("""
+        SELECT 
+            o.txid,
+            o.vout as out_index,
+            o.value as amount,
+            o.addresses as address,
+            COALESCE(i.txid, NULL) as spending_tx_id
+        FROM tx_out o
+        LEFT JOIN tx_in i 
+            ON o.txid = i.prev_txid 
+            AND o.vout = i.prev_vout
+        WHERE o.txid = ?
+        ORDER BY o.vout;
+    """)
+
+    vins_stmt = con.prepare("""
+        SELECT 
+            i.prev_txid,
+            i.prev_vout,
+            p_o.value as amount,
+            p_o.addresses as address,
+            i.txid as current_txid
+        FROM tx_in i
+        LEFT JOIN tx_out p_o 
+            ON p_o.txid = i.prev_txid 
+            AND p_o.vout = i.prev_vout
+        WHERE i.txid = ?
+        ORDER BY i.prev_vout;
+    """)
+
+    coinbase_stmt = con.prepare("""
+        SELECT COUNT(*) = 1 AND COUNT(*) = (
+            SELECT COUNT(*)
+            FROM tx_in
+            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
+        )
+        FROM tx_in
+        WHERE txid = ?;
+    """)
+
+    # Process transactions in batches
+    BATCH_SIZE = 1000
+    offset = 0
     
-    # Process each transaction
-    for tx in transactions:
+    while True:
+        batch_query = f"{tx_query} LIMIT {BATCH_SIZE} OFFSET {offset}"
+        transactions = con.execute(batch_query).fetchall()
+        
+        if not transactions:
+            break
+            
+        for tx in transactions:
         if terminate_event.is_set():
             break
 
@@ -220,17 +271,6 @@ if __name__ == "__main__":
                 } for vin in vins
             ]
 
-        # Query to check if transaction is coinbase (moved up)
-        coinbase_query = """
-        SELECT COUNT(*) = 1 AND COUNT(*) = (
-            SELECT COUNT(*)
-            FROM tx_in
-            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
-        )
-        FROM tx_in
-        WHERE txid = ?;
-        """
-        is_coinbase = con.execute(coinbase_query, [tx_id, '0' * 64, tx_id]).fetchone()[0]
 
         # Calculate totals
         in_total_amount = sum(vin["amount"] for vin in vins_list)
