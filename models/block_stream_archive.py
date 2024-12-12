@@ -179,6 +179,18 @@ if __name__ == "__main__":
         """
         vins = con.execute(vins_query, [tx_id]).fetchall()
 
+        # Check if transaction is coinbase
+        coinbase_query = """
+        SELECT COUNT(*) = 1 AND COUNT(*) = (
+            SELECT COUNT(*)
+            FROM tx_in
+            WHERE txid = ? AND prev_txid = ? AND prev_vout = 4294967295
+        )
+        FROM tx_in
+        WHERE txid = ?;
+        """
+        is_coinbase = con.execute(coinbase_query, [tx_id, '0' * 64, tx_id]).fetchone()[0]
+
         # Process outputs
         vouts_list = [
             {
@@ -200,7 +212,7 @@ if __name__ == "__main__":
                 } for vin in vins
             ]
 
-        # Query to check if transaction is coinbase
+        # Query to check if transaction is coinbase (moved up)
         coinbase_query = """
         SELECT COUNT(*) = 1 AND COUNT(*) = (
             SELECT COUNT(*)
