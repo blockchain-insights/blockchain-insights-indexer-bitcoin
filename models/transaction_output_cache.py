@@ -41,6 +41,7 @@ class TransactionOutputCache:
 
     def _initialize_tables(self):
         """Initialize the in-memory tables with optimized schema"""
+        # Core transaction output tables
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS outputs (
                 tx_key VARCHAR,        -- Combined txid-vout, e.g. {txid}-{vout}
@@ -59,9 +60,60 @@ class TransactionOutputCache:
             )
         """)
 
-        # Indexes
+        # Block archive tables
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS blocks (
+                hash VARCHAR,
+                height INTEGER,
+                version INTEGER,
+                size INTEGER,
+                prev_block_hash VARCHAR,
+                merkleroot VARCHAR,
+                time INTEGER,
+                bits INTEGER,
+                nonce BIGINT
+            )
+        """)
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                txid VARCHAR,
+                block_hash VARCHAR,
+                version INTEGER,
+                index INTEGER
+            )
+        """)
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS tx_in (
+                txid VARCHAR,
+                prev_txid VARCHAR,
+                prev_vout BIGINT,
+                scriptsig VARCHAR,
+                sequence BIGINT
+            )
+        """)
+
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS tx_out (
+                txid VARCHAR,
+                vout INTEGER,
+                value BIGINT,
+                scriptpubkey VARCHAR,
+                addresses VARCHAR
+            )
+        """)
+
+        # Create indexes for all tables
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_tx_key ON outputs(tx_key)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_outputs_block_height ON outputs(block_height)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_txid ON transactions(txid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_block_hash ON transactions(block_hash)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_in_txid ON tx_in(txid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_in_prev ON tx_in(prev_txid, prev_vout)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_out_txid ON tx_out(txid)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_tx_out_composite ON tx_out(txid, vout)")
 
         logger.info("Initialized in-memory transaction outputs tables with optimized schema")
 
