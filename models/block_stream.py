@@ -293,6 +293,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Bitcoin Block Stream Processor')
     parser.add_argument('--partition', type=int, help='Specific partition to index')
+    parser.add_argument('--live', action='store_true', help='Index from last indexed block')
     args = parser.parse_args()
 
     def patch_record(record):
@@ -347,13 +348,25 @@ if __name__ == "__main__":
     producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
-    # Determine start and end heights based on partition or last indexed block
+    # Show available options if no arguments provided
+    if args.partition is None and not args.live:
+        logger.info("Available partitions and their block ranges:")
+        for partition in range(producer.num_partitions):
+            start, end = producer.partitioner.get_partition_range(partition)
+            end_str = str(end) if end != float('inf') else "∞"
+            logger.info(f"Partition {partition}: blocks {start} - {end_str}")
+        logger.info("\nUsage options:")
+        logger.info("1. Index specific partition:  --partition <number>")
+        logger.info("2. Index from last block:     --live")
+        sys.exit(0)
+
+    # Determine start and end heights based on arguments
     if args.partition is not None:
         partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
         start_height = partition_start
         end_height = partition_end
         logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
-    else:
+    elif args.live:
         # Find the last indexed block
         current_height = bitcoin_node.get_current_block_height()
         start_height = 0
@@ -362,6 +375,7 @@ if __name__ == "__main__":
                 start_height = height + 1
                 break
         end_height = None
+        logger.info(f"Live indexing from last indexed block: {start_height}")
 
     # Find the first non-indexed block from our start point
     while start_height <= (end_height or bitcoin_node.get_current_block_height()):
