@@ -93,26 +93,12 @@ class BlockStreamProducer:
         """Process all transactions in a block"""
         try:
             transactions = []
-            start_time = time.time()
-
             for tx in block.transactions:
                 if tx.tx_id in self.duplicate_tx and block.block_height in self.duplicate_block:
                     logger.warning(f"Skipping duplicate transaction {tx.tx_id}")
                     continue
-
                 transaction = self.process_transaction(tx, block, tx_cache)
                 transactions.append(transaction)
-
-            end_time = time.time()
-            time_taken = end_time - start_time
-
-            logger.info(
-                "Processed block",
-                block_height=block.block_height,
-                num_transactions=len(transactions),
-                time_taken=f"{time_taken:.2f}s",
-                tps=f"{len(transactions) / time_taken:.2f}" if time_taken > 0 else "∞"
-            )
 
             return transactions
 
@@ -191,7 +177,11 @@ class BlockStream:
             if self.end_height and window_end > self.end_height:
                 window_end = self.end_height
 
+            start_time = time.time()
             blocks: List[Block] = [parse_block_data(block) for block in self.bitcoin_node.get_blocks_by_height_range(start_height, window_end)]
+            end_time = time.time()
+            time_taken = end_time - start_time
+            logger.info("Fetched blocks", num_blocks=len(blocks), time_taken=f"{time_taken:.2f}s")
 
             if not blocks:
                 return False
@@ -204,18 +194,29 @@ class BlockStream:
                         if vin.tx_id != 0 and vin.tx_id not in tx_ids:
                             tx_ids.append((vin.tx_id, vin.vout_id))
 
+            start_time = time.time()
             tx_cache = bitcoin_node.get_addresses_and_amounts_by_txouts(tx_ids)
+            end_time = time.time()
+            time_taken = end_time - start_time
+            logger.info(
+                "Built tx cache",
+                num_tx=len(tx_ids),
+                time_taken=f"{time_taken:.2f}s",
+                tps=f"{len(tx_ids) / time_taken:.2f}" if time_taken > 0 else "∞"
+            )
 
+            start_time = time.time()
             for block in blocks:
-
                 if self.state_manager.check_if_block_height_is_indexed(block.block_height):
                     logger.info(f"Skipping block. Already indexed.", block_height=block.block_height)
                     continue
-
                 transactions = self.producer.process_block(block, tx_cache)
                 if transactions:
                     self.producer.send_to_stream(transactions)
                     self.state_manager.add_block_height(block.block_height)
+            end_time = time.time()
+            time_taken = end_time - start_time
+            logger.info("Processed blocks", num_blocks=len(blocks), time_taken=f"{time_taken:.2f}s")
 
             return True
 
