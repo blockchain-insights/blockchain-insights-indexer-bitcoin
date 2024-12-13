@@ -190,7 +190,8 @@ class BlockStream:
             producer: BlockStreamProducer,
             state_manager,
             terminate_event: threading.Event,
-            window_size: int = 3
+            window_size: int = 3,
+            end_height: int = None
     ):
         self.bitcoin_node = bitcoin_node
         self.producer = producer
@@ -246,6 +247,9 @@ class BlockStream:
         forward_block_height = start_height
 
         while not self.terminate_event.is_set():
+            if self.end_height and forward_block_height > self.end_height:
+                logger.info(f"Reached end height {self.end_height}. Stopping.")
+                break
             try:
                 current_block_height = self.bitcoin_node.get_current_block_height() - skip_blocks
 
@@ -280,8 +284,14 @@ class BlockStream:
 
 # Main script section
 if __name__ == "__main__":
+    import argparse
     from dotenv import load_dotenv
     load_dotenv()
+
+    parser = argparse.ArgumentParser(description='Bitcoin Block Stream Processor')
+    parser.add_argument('--start-height', type=int, required=True, help='Starting block height')
+    parser.add_argument('--end-height', type=int, help='Ending block height (optional)')
+    args = parser.parse_args()
 
     def patch_record(record):
         record["extra"]["service"] = 'bitcoin-block-stream'
@@ -335,8 +345,24 @@ if __name__ == "__main__":
     producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
-    block_stream = BlockStream(bitcoin_node, producer, state_manager, terminate_event)
-    start_height = state_manager.get_last_block_height() + 1
+    # Align heights with partition boundaries
+    partitioner = BlockRangePartitioner()
+    start_height = partitioner.align_height_to_partition(args.start_height)
+    end_height = None
+    if args.end_height:
+        end_height = partitioner.align_height_to_partition(args.end_height, round_up=True)
+        if end_height > args.end_height:
+            end_height -= 1
+
+    logger.info(f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}")
+    
+    block_stream = BlockStream(
+        bitcoin_node, 
+        producer, 
+        state_manager, 
+        terminate_event,
+        end_height=end_height
+    )
     block_stream.run(start_height)
 
     logger.info("Block stream stopped.")
