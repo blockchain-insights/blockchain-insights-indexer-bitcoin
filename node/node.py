@@ -194,7 +194,7 @@ class BitcoinNode(Node):
 
         return tx
 
-    def process_in_memory_txn_for_indexing(self, tx: Transaction):
+    def process_in_memory_txn_for_indexing(self, tx: Transaction, tx_cache: dict):
         input_amounts = {}  # input amounts by address in satoshi
         output_amounts = {}  # output amounts by address in satoshi
 
@@ -202,7 +202,7 @@ class BitcoinNode(Node):
             if vin.tx_id == 0:
                 continue
 
-            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin.tx_id, str(vin.vout_id))
+            address, amount = tx_cache.get((vin.tx_id, vin.vout_id))
             input_amounts[address] = input_amounts.get(address, 0) + amount
 
         for vout in tx.vouts:
