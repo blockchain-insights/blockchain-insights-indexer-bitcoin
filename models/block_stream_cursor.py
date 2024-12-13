@@ -30,34 +30,6 @@ class BlockStreamCursorManager:
     def close(self):
         self.engine.dispose()
 
-    def find_first_gap(self, start_height: int, end_height: int = None, topic="transactions", network="bitcoin") -> int:
-        """Find the first non-indexed block height in the given range"""
-        with self.Session() as session:
-            # Build query for blocks in range
-            query = f"""
-                WITH seq AS (
-                    SELECT generate_series({start_height}, 
-                                        CASE WHEN {end_height} IS NULL 
-                                        THEN (SELECT MAX(block_height) FROM block_stream_state WHERE topic = :topic AND network = :network)
-                                        ELSE {end_height} END) AS block_height
-                )
-                SELECT seq.block_height
-                FROM seq
-                LEFT JOIN block_stream_state bss ON 
-                    seq.block_height = bss.block_height AND
-                    bss.topic = :topic AND
-                    bss.network = :network
-                WHERE bss.block_height IS NULL
-                ORDER BY seq.block_height
-                LIMIT 1
-            """
-            
-            result = session.execute(text(query), 
-                                   {'topic': topic, 'network': network}).first()
-            
-            if result:
-                return result[0]
-            return None
 
     def get_cursor(self, partition: int) -> Optional[BlockStreamCursor]:
         """

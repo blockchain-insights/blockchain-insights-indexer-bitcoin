@@ -355,7 +355,7 @@ if __name__ == "__main__":
             end_height -= 1
 
     # Find the first non-indexed block in our range
-    start_height = state_manager.find_first_gap(aligned_start, end_height)
+    start_height = state_manager.find_first_gap(aligned_start, end_height, topic="transactions")
     if start_height is None:
         if end_height is None:
             # If no end height specified, start from the next block after the last indexed
