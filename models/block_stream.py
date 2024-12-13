@@ -244,7 +244,6 @@ class BlockStream:
 
     def run(self, start_height: int):
         """Main processing loop"""
-        skip_blocks = 6
         forward_block_height = start_height
 
         while not self.terminate_event.is_set():
@@ -252,7 +251,7 @@ class BlockStream:
                 logger.info(f"Reached end height {self.end_height}. Stopping.")
                 break
             try:
-                current_block_height = self.bitcoin_node.get_current_block_height() - skip_blocks
+                current_block_height = self.bitcoin_node.get_current_block_height()
 
                 if forward_block_height > current_block_height:
                     logger.info(
@@ -356,13 +355,15 @@ if __name__ == "__main__":
             end_height -= 1
 
     # Find the first non-indexed block in our range
-    start_height = aligned_start
-    range_end = end_height if end_height is not None else aligned_start + 1000  # Check first 1000 blocks if no end specified
-    
-    for height in range(aligned_start, range_end + 1):
-        if not state_manager.check_if_block_height_is_indexed(height):
-            start_height = height
-            break
+    start_height = state_manager.find_first_gap(aligned_start, end_height)
+    if start_height is None:
+        if end_height is None:
+            # If no end height specified, start from the next block after the last indexed
+            current_height = bitcoin_node.get_current_block_height()
+            start_height = state_manager.find_first_gap(0, current_height)
+        else:
+            logger.info("No gaps found in specified range. Exiting.")
+            sys.exit(0)
 
     logger.info(
         f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}",
