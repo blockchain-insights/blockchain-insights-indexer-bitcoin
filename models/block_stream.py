@@ -368,22 +368,14 @@ if __name__ == "__main__":
         logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
     elif args.live:
         # Find the last indexed block
-        current_height = bitcoin_node.get_current_block_height()
-        start_height = 0
-        for height in range(current_height, -1, -1):
-            if state_manager.check_if_block_height_is_indexed(height, topic="transactions"):
-                start_height = height + 1
-                break
+        last_indexed = state_manager.get_last_indexed_block(topic="transactions")
+        start_height = last_indexed + 1
         end_height = None
         logger.info(f"Live indexing from last indexed block: {start_height}")
 
-    # Find the first non-indexed block from our start point
-    while start_height <= (end_height or bitcoin_node.get_current_block_height()):
-        if not state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
-            break
-        start_height += 1
-    else:
-        logger.info("No gaps found in specified range. Exiting.")
+    # Verify start point is not already indexed
+    if state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
+        logger.info(f"Block height {start_height} already indexed. Exiting.")
         sys.exit(0)
 
     logger.info(
