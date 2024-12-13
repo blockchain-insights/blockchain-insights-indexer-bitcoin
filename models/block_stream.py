@@ -345,16 +345,24 @@ if __name__ == "__main__":
     producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
-    # Align heights with partition boundaries
+    # Check last indexed block and align heights with partition boundaries
     partitioner = BlockRangePartitioner()
-    start_height = partitioner.align_height_to_partition(args.start_height)
+    last_indexed_height = state_manager.get_last_block_height()
+    start_height = max(partitioner.align_height_to_partition(args.start_height), last_indexed_height + 1)
     end_height = None
     if args.end_height:
         end_height = partitioner.align_height_to_partition(args.end_height, round_up=True)
         if end_height > args.end_height:
             end_height -= 1
 
-    logger.info(f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}")
+    logger.info(
+        f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}",
+        extra={
+            "requested_start": args.start_height,
+            "last_indexed": last_indexed_height,
+            "aligned_start": start_height
+        }
+    )
     
     block_stream = BlockStream(
         bitcoin_node, 
