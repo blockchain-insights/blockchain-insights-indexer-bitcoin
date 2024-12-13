@@ -1,3 +1,4 @@
+import asyncio
 import os
 import sys
 import signal
@@ -5,6 +6,8 @@ import threading
 import time
 import json
 import traceback
+from itertools import islice
+
 from confluent_kafka.admin import AdminClient
 from confluent_kafka import admin
 from confluent_kafka import Producer
@@ -61,37 +64,15 @@ class BlockStreamProducer:
             raise
 
     def process_transaction(self, tx: Transaction, block: Block, tx_cache: dict) -> dict:
-        """Process a single transaction with cached lookups"""
-
-        start_time = time.time()
-
-        # Process inputs
-        in_amount_by_address = {}
-        if not tx.is_coinbase:
-            for vin in tx.vins:
-                in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
-                address, amount = tx_cache.get((vin.tx_id, vin.vout_id))
-                in_amount_by_address[address] = in_amount_by_address.get(address, 0) + amount
-
-        # Process outputs
-        out_amount_by_address = {}
-        for vout in tx.vouts:
-            address = vout.address
-            out_amount_by_address[address] = out_amount_by_address.get(address, 0) + vout.value_satoshi
-
-        if not tx.is_coinbase:
-            for addr, amt in in_amount_by_address.items():
-                if amt == 0:
-                    raise ValueError(f"Transaction for vin was not found in cache: {tx.tx_id}")
-
+        in_amount_by_address, out_amount_by_address, _, _, in_total, out_total = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
         transaction_data = {
             "tx_id": tx.tx_id,
             "tx_index": tx.index,
             "timestamp": block.timestamp,
             "block_height": block.block_height,
             "is_coinbase": tx.is_coinbase,
-            "in_total_amount": sum(in_amount_by_address.values()),
-            "out_total_amount": sum(out_amount_by_address.values()),
+            "in_total_amount": in_total,
+            "out_total_amount": out_total,
             "vins": [
                 {"address": addr, "amount": amt, "tx_id": tx.tx_id}
                 for addr, amt in in_amount_by_address.items()
@@ -107,37 +88,57 @@ class BlockStreamProducer:
             "weight": tx.weight
         }
 
-        end_time = time.time()
-        processing_time = end_time - start_time
-        logger.info(f"Processed transaction {tx.tx_id} in {processing_time:.4f} seconds")
-
         return transaction_data
 
-    def process_block(self, block: Block, tx_cache: dict) -> dict:
-        """Process all transactions in a block"""
+    async def process_block(self, block: Block, tx_cache: dict, chunk_size: int = 100) -> List[dict]:
         try:
-            transactions = []
             start_time = time.time()
+            all_transactions = []
 
-            for tx in block.transactions:
-                if tx.tx_id in self.duplicate_tx and block.block_height in self.duplicate_block:
-                    logger.warning(f"Skipping duplicate transaction {tx.tx_id}")
+            # Split transactions into chunks
+            def get_chunks(data: list, size: int):
+                it = iter(data)
+                return iter(lambda: list(islice(it, size)), [])
+
+            transaction_chunks = list(get_chunks(block.transactions, chunk_size))
+            num_chunks = len(transaction_chunks)
+
+            logger.info(f"Processing block {block.block_height} in {num_chunks} chunks")
+
+            # Process a single chunk of transactions
+            async def process_chunk(chunk: List) -> List[dict]:
+                chunk_transactions = []
+
+                for tx in chunk:
+                    try:
+                        if tx.tx_id in self.duplicate_tx and block.block_height in self.duplicate_block:
+                            logger.warning(f"Skipping duplicate transaction {tx.tx_id}")
+                            continue
+
+                        transaction = self.process_transaction(tx, block, tx_cache)
+                        chunk_transactions.append(transaction)
+
+                    except Exception as e:
+                        logger.error(
+                            "Failed to process transaction",
+                            tx_id=tx.tx_id,
+                            error=str(e),
+                            traceback=traceback.format_exc()
+                        )
+                        continue
+
+                return chunk_transactions
+
+            # Process all chunks in parallel
+            tasks = [process_chunk(chunk) for chunk in transaction_chunks]
+            chunk_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Combine results from all chunks
+            for result in chunk_results:
+                if isinstance(result, Exception):
+                    logger.error(f"Chunk processing failed: {str(result)}")
                     continue
-
-                transaction = self.process_transaction(tx, block, tx_cache)
-                transactions.append(transaction)
-                logger.info(
-                    "Processed transaction",
-                    tx_id=tx.tx_id,
-                    block_height=block.block_height,
-                    is_coinbase=tx.is_coinbase,
-                    num_vins=len(tx.vins),
-                    num_vouts=len(tx.vouts)
-                )
-
-                if self.terminate_event.is_set():
-                    logger.info("Terminating processing loop")
-                    break
+                all_transactions.extend(result)
 
             end_time = time.time()
             time_taken = end_time - start_time
@@ -145,18 +146,19 @@ class BlockStreamProducer:
             logger.info(
                 "Processed block",
                 block_height=block.block_height,
-                num_transactions=len(transactions),
+                num_transactions=len(all_transactions),
+                num_chunks=num_chunks,
                 time_taken=f"{time_taken:.2f}s",
-                tps=f"{len(transactions) / time_taken:.2f}" if time_taken > 0 else "∞"
+                tps=f"{len(all_transactions) / time_taken:.2f}" if time_taken > 0 else "∞"
             )
 
-            return transactions
+            return all_transactions
 
         except Exception as e:
             logger.error(
                 "Failed to process block",
                 block_height=block.block_height,
-                error=e,
+                error=str(e),
                 traceback=traceback.format_exc()
             )
             raise e
@@ -245,7 +247,7 @@ class BlockStream:
                     logger.info(f"Skipping block. Already indexed.", block_height=block.block_height)
                     continue
 
-                transactions = self.producer.process_block(block, tx_cache)
+                transactions = asyncio.run(self.producer.process_block(block, tx_cache))
                 if self.terminate_event.is_set():
                     logger.info("Terminating processing loop")
                     return False
