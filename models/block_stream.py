@@ -355,15 +355,14 @@ if __name__ == "__main__":
             end_height -= 1
 
     # Find the first non-indexed block in our range
-    start_height = state_manager.find_first_gap(aligned_start, end_height, topic="transactions")
-    if start_height is None:
-        if end_height is None:
-            # If no end height specified, start from the next block after the last indexed
-            current_height = bitcoin_node.get_current_block_height()
-            start_height = state_manager.find_first_gap(0, current_height)
-        else:
-            logger.info("No gaps found in specified range. Exiting.")
-            sys.exit(0)
+    start_height = aligned_start
+    while start_height <= (end_height or bitcoin_node.get_current_block_height()):
+        if not state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
+            break
+        start_height += 1
+    else:
+        logger.info("No gaps found in specified range. Exiting.")
+        sys.exit(0)
 
     logger.info(
         f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}",
