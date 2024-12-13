@@ -289,7 +289,7 @@ if __name__ == "__main__":
     load_dotenv()
 
     parser = argparse.ArgumentParser(description='Bitcoin Block Stream Processor')
-    parser.add_argument('--start-height', type=int, required=True, help='Starting block height')
+    parser.add_argument('--start-height', type=int, default=0, help='Starting block height (default: 0)')
     parser.add_argument('--end-height', type=int, help='Ending block height (optional)')
     args = parser.parse_args()
 
