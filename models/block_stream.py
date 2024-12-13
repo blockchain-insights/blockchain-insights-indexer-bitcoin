@@ -362,10 +362,20 @@ if __name__ == "__main__":
     # Determine start and end heights based on arguments
     if args.partition is not None:
         partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
-        start_height = partition_start
         end_height = partition_end
 
-        # TODO: find gab in partition range, get lowest not indexed block; use that as start_height
+        # Find first non-indexed block in partition range
+        start_height = partition_start
+        while start_height <= partition_end:
+            if not state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
+                break
+            start_height += 1
+        
+        if start_height > partition_end:
+            logger.info(f"Partition {args.partition} fully indexed. Exiting.")
+            sys.exit(0)
+            
+        logger.info(f"Starting from first non-indexed block {start_height} in partition {args.partition}")
 
         logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
     elif args.live:
