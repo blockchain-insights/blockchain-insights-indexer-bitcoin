@@ -203,9 +203,12 @@ class BlockStream:
     def process_window(self, start_height: int) -> bool:
         """Process a window of blocks"""
         try:
-            # Get blocks for window
-            end_height = start_height + self.window_size - 1
-            blocks : List[Block] = [parse_block_data(block) for block in self.bitcoin_node.get_blocks_by_height_range(start_height, end_height)]
+            # Get blocks for window, respecting end_height limit
+            window_end = start_height + self.window_size - 1
+            if self.end_height and window_end > self.end_height:
+                window_end = self.end_height
+            
+            blocks : List[Block] = [parse_block_data(block) for block in self.bitcoin_node.get_blocks_by_height_range(start_height, window_end)]
 
             if not blocks:
                 return False
