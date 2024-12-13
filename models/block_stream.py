@@ -5,7 +5,6 @@ import threading
 import time
 import json
 import traceback
-from decimal import Decimal
 from confluent_kafka.admin import AdminClient
 from confluent_kafka import admin
 from confluent_kafka import Producer
@@ -14,11 +13,11 @@ from typing import List
 from models.block_range_partitioner import BlockRangePartitioner
 from models.block_stream_state import BlockStreamStateManager
 from node.node import BitcoinNode
-from node.node_utils import derive_address, parse_block_data, Block, Transaction
+from node.node_utils import parse_block_data, Block, Transaction
 
 
 class BlockStreamProducer:
-    def __init__(self, kafka_config: dict, bitcoin_node, db_url: str, num_partitions: int = 39, terminate_event: threading.Event = None):
+    def __init__(self, kafka_config: dict, bitcoin_node, num_partitions: int = 39, terminate_event: threading.Event = None):
         self.producer = Producer(kafka_config)
         self.bitcoin_node = bitcoin_node
         self.topic_name = "transactions"
@@ -345,7 +344,7 @@ if __name__ == "__main__":
         'compression.level': 9  # Max ZSTD compression
     }
 
-    producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
+    producer = BlockStreamProducer(kafka_config, bitcoin_node, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
     # Show available options if no arguments provided
@@ -365,18 +364,16 @@ if __name__ == "__main__":
         partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
         start_height = partition_start
         end_height = partition_end
+
+        # TODO: find gab in partition range, get lowest not indexed block; use that as start_height
+
         logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
     elif args.live:
         # Find the last indexed block
-        last_indexed = state_manager.get_last_indexed_block(topic="transactions")
+        last_indexed = state_manager.get_last_block_height(topic="transactions")
         start_height = last_indexed + 1
         end_height = None
         logger.info(f"Live indexing from last indexed block: {start_height}")
-
-    # Verify start point is not already indexed
-    if state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
-        logger.info(f"Block height {start_height} already indexed. Exiting.")
-        sys.exit(0)
 
     logger.info(
         "Starting block stream",
