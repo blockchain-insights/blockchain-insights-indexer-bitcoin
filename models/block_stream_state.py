@@ -48,3 +48,27 @@ class BlockStreamStateManager:
             ranges_query = text("""SELECT block_height FROM block_stream_state WHERE block_height = :block_height AND topic = :topic AND network = :network""")
             block_height = session.execute(ranges_query, {"block_height": block_height, "topic": topic, "network": network}).fetchone()
             return block_height is not None
+
+    def find_first_gap_in_range(self, start: int, end: int, topic=BLOCK_STREAM_TOPIC_NAME, network="bitcoin") -> int:
+        with self.Session() as session:
+            result = session.execute(
+                text("""
+                    WITH partition_range AS (
+                        SELECT generate_series(:start, :end) AS block_height
+                    )
+                    SELECT MIN(pr.block_height)
+                    FROM partition_range pr
+                    LEFT JOIN block_stream_state bss ON 
+                        bss.block_height = pr.block_height 
+                        AND bss.topic = :topic
+                        AND bss.network = :network
+                    WHERE bss.block_height IS NULL
+                """),
+                {
+                    "start": start,
+                    "end": end,
+                    "topic": topic,
+                    "network": network
+                }
+            ).scalar()
+            return result

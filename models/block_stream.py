@@ -63,6 +63,8 @@ class BlockStreamProducer:
     def process_transaction(self, tx: Transaction, block: Block, tx_cache: dict) -> dict:
         """Process a single transaction with cached lookups"""
 
+        start_time = time.time()
+
         # Process inputs
         in_amount_by_address = {}
         if not tx.is_coinbase:
@@ -82,7 +84,7 @@ class BlockStreamProducer:
                 if amt == 0:
                     raise ValueError(f"Transaction for vin was not found in cache: {tx.tx_id}")
 
-        return {
+        transaction_data = {
             "tx_id": tx.tx_id,
             "tx_index": tx.index,
             "timestamp": block.timestamp,
@@ -105,6 +107,12 @@ class BlockStreamProducer:
             "weight": tx.weight
         }
 
+        end_time = time.time()
+        processing_time = end_time - start_time
+        logger.info(f"Processed transaction {tx.tx_id} in {processing_time:.4f} seconds")
+
+        return transaction_data
+
     def process_block(self, block: Block, tx_cache: dict) -> dict:
         """Process all transactions in a block"""
         try:
@@ -118,6 +126,18 @@ class BlockStreamProducer:
 
                 transaction = self.process_transaction(tx, block, tx_cache)
                 transactions.append(transaction)
+                logger.info(
+                    "Processed transaction",
+                    tx_id=tx.tx_id,
+                    block_height=block.block_height,
+                    is_coinbase=tx.is_coinbase,
+                    num_vins=len(tx.vins),
+                    num_vouts=len(tx.vouts)
+                )
+
+                if self.terminate_event.is_set():
+                    logger.info("Terminating processing loop")
+                    break
 
             end_time = time.time()
             time_taken = end_time - start_time
@@ -189,23 +209,21 @@ class BlockStream:
             producer: BlockStreamProducer,
             state_manager,
             terminate_event: threading.Event,
-            window_size: int = 3,
-            end_height: int = None
+            window_size: int = 3
     ):
         self.bitcoin_node = bitcoin_node
         self.producer = producer
         self.state_manager = state_manager
         self.terminate_event = terminate_event
         self.window_size = window_size
-        self.end_height = end_height
 
-    def process_window(self, start_height: int) -> bool:
+    def process_window(self, start_height: int, end_height: int) -> bool:
         """Process a window of blocks"""
         try:
             # Get blocks for window, respecting end_height limit
             window_end = start_height + self.window_size - 1
-            if self.end_height and window_end > self.end_height:
-                window_end = self.end_height
+            if end_height and window_end > end_height:
+                window_end = end_height
             
             blocks : List[Block] = [parse_block_data(block) for block in self.bitcoin_node.get_blocks_by_height_range(start_height, window_end)]
 
@@ -223,12 +241,15 @@ class BlockStream:
             tx_cache = bitcoin_node.get_addresses_and_amounts_by_txouts(tx_ids)
 
             for block in blocks:
-
                 if self.state_manager.check_if_block_height_is_indexed(block.block_height):
                     logger.info(f"Skipping block. Already indexed.", block_height=block.block_height)
                     continue
 
                 transactions = self.producer.process_block(block, tx_cache)
+                if self.terminate_event.is_set():
+                    logger.info("Terminating processing loop")
+                    return False
+
                 if transactions:
                     self.producer.send_to_stream(transactions)
                     self.state_manager.add_block_height(block.block_height)
@@ -244,13 +265,13 @@ class BlockStream:
             )
             raise e
 
-    def run(self, start_height: int):
+    def run(self, start_height: int, end_height: int = None):
         """Main processing loop"""
         forward_block_height = start_height
 
         while not self.terminate_event.is_set():
-            if self.end_height and forward_block_height > self.end_height:
-                logger.info(f"Reached end height {self.end_height}. Stopping.")
+            if end_height and forward_block_height > end_height:
+                logger.info(f"Reached end height {end_height}. Stopping.")
                 break
             try:
                 current_block_height = self.bitcoin_node.get_current_block_height()
@@ -264,11 +285,18 @@ class BlockStream:
                     time.sleep(10)
                     continue
 
-                success = self.process_window(forward_block_height)
+                success = self.process_window(forward_block_height, end_height)
 
                 if success:
                     forward_block_height += self.window_size
+                    if end_height and forward_block_height > end_height:
+                        logger.info(f"Finished indexing up to end height {end_height}. Stopping.")
+                        break
                 else:
+                    if self.terminate_event.is_set():
+                        logger.info("Terminating processing loop")
+                        break
+
                     logger.error(
                         "Failed to process window",
                         start_height=forward_block_height
@@ -398,9 +426,8 @@ if __name__ == "__main__":
         bitcoin_node, 
         producer, 
         state_manager, 
-        terminate_event,
-        end_height=end_height
+        terminate_event
     )
-    block_stream.run(start_height)
+    block_stream.run(start_height, end_height)
 
     logger.info("Block stream stopped.")
