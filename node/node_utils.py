@@ -179,6 +179,7 @@ class Block:
 @dataclass
 class Transaction:
     tx_id: str
+    index: int
     block_height: int
     timestamp: int  # Using int to represent Unix epoch time
     fee_satoshi: int
@@ -236,6 +237,7 @@ def parse_block_data(block_data):
 
             tx = Transaction(
                 tx_id=tx_id,
+                index=tx_data.get("index", 0),
                 block_height=block_height,
                 timestamp=tx_timestamp,
                 fee_satoshi=fee_satoshi,

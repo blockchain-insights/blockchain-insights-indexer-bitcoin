@@ -14,7 +14,7 @@ from typing import List
 from models.block_range_partitioner import BlockRangePartitioner
 from models.block_stream_state import BlockStreamStateManager
 from node.node import BitcoinNode
-from node.node_utils import derive_address
+from node.node_utils import derive_address, parse_block_data, Block, Transaction
 
 
 class BlockStreamProducer:
@@ -61,78 +61,60 @@ class BlockStreamProducer:
             logger.error(f"Error managing topic", error=e, trb=traceback.format_exc())
             raise
 
-    def process_transaction(self, tx: dict, block: dict, tx_cache: dict) -> dict:
+    def process_transaction(self, tx: Transaction, block: Block, tx_cache: dict) -> dict:
         """Process a single transaction with cached lookups"""
-        is_coinbase = len(tx["vin"]) == 1 and "coinbase" in tx["vin"][0]
 
         # Process inputs
         in_amount_by_address = {}
-        if not is_coinbase:
-            for vin in tx["vin"]:
+        if not tx.is_coinbase:
+            for vin in tx.vins:
                 in_amount_by_address, out_amount_by_address, input_addresses, output_addresses, in_total_amount, out_total_amount = self.bitcoin_node.process_in_memory_txn_for_indexing(tx)
-                address, amount = tx_cache.get(f"{vin['txid']}-{vin['vout']}")
+                address, amount = tx_cache.get((vin.tx_id, vin.vout_id))
                 in_amount_by_address[address] = in_amount_by_address.get(address, 0) + amount
 
         # Process outputs
         out_amount_by_address = {}
-        for vout in tx["vout"]:
-            if vout["scriptPubKey"].get("type") in ["nonstandard", "nulldata"]:
-                continue
+        for vout in tx.vouts:
+            address = vout.address
+            out_amount_by_address[address] = out_amount_by_address.get(address, 0) + vout.value_satoshi
 
-            script_pubkey = vout["scriptPubKey"]
-            script_type = script_pubkey.get("type", "unknown")
-            address = derive_address(script_pubkey, script_pubkey.get("asm", ""))
-            if address.startswith("unknown-") or address.startswith("UNKNOWN_"):
-                raise ValueError(f"Could not derive address for script type {script_type}: {script_pubkey}")
-
-            amount = int(Decimal(vout["value"]) * 100000000)
-            out_amount_by_address[address] = out_amount_by_address.get(address, 0) + amount
-
-        if not is_coinbase:
+        if not tx.is_coinbase:
             for addr, amt in in_amount_by_address.items():
                 if amt == 0:
-                    raise ValueError(f"Transaction for vin was not found in cache: {tx['txid']}")
+                    raise ValueError(f"Transaction for vin was not found in cache: {tx.tx_id}")
 
         return {
-            "tx_id": tx["txid"],
-            "tx_index": tx.get("index", 0),
-            "timestamp": block["time"],
-            "block_height": block["height"],
-            "is_coinbase": is_coinbase,
+            "tx_id": tx.tx_id,
+            "tx_index": tx.index,
+            "timestamp": block.timestamp,
+            "block_height": block.block_height,
+            "is_coinbase": tx.is_coinbase,
             "in_total_amount": sum(in_amount_by_address.values()),
             "out_total_amount": sum(out_amount_by_address.values()),
             "vins": [
-                {"address": addr, "amount": amt, "tx_id": tx["txid"]}
+                {"address": addr, "amount": amt, "tx_id": tx.tx_id}
                 for addr, amt in in_amount_by_address.items()
                 if amt != 0
             ],
             "vouts": [
-                {"address": addr, "amount": amt, "tx_id": tx["txid"]}
+                {"address": addr, "amount": amt, "tx_id": tx.tx_id}
                 for addr, amt in out_amount_by_address.items()
                 if amt != 0
             ],
-            "size": tx.get("size", 0),
-            "vsize": tx.get("vsize", 0),
-            "weight": tx.get("weight", 0)
+            "size": tx.size,
+            "vsize": tx.vsize,
+            "weight": tx.weight
         }
 
-    def process_block(self, block: dict) -> List[dict]:
+    def process_block(self, block: Block, tx_cache: dict) -> dict:
         """Process all transactions in a block"""
         try:
             transactions = []
             start_time = time.time()
 
-            tx_ids = []
-            for tx in block["tx"]:
-                for vin in tx["vin"]:
-                    if "txid" in vin and vin["txid"] not in tx_ids:
-                        tx_ids.append((vin["txid"], vin["vout"]))
-            ## TODO: move this away from this function, to upper level where we have a block window !!
-            tx_cache = bitcoin_node.get_addresses_and_amounts_by_txouts(tx_ids)
-
-            for tx in block["tx"]:
-                if tx["txid"] in self.duplicate_tx and block['height'] in self.duplicate_block:
-                    logger.warning(f"Skipping duplicate transaction {tx['txid']}")
+            for tx in block.transactions:
+                if tx.tx_id in self.duplicate_tx and block.block_height in self.duplicate_block:
+                    logger.warning(f"Skipping duplicate transaction {tx.tx_id}")
                     continue
 
                 transaction = self.process_transaction(tx, block, tx_cache)
@@ -143,7 +125,7 @@ class BlockStreamProducer:
 
             logger.info(
                 "Processed block",
-                block_height=block["height"],
+                block_height=block.block_height,
                 num_transactions=len(transactions),
                 time_taken=f"{time_taken:.2f}s",
                 tps=f"{len(transactions) / time_taken:.2f}" if time_taken > 0 else "∞"
@@ -154,23 +136,23 @@ class BlockStreamProducer:
         except Exception as e:
             logger.error(
                 "Failed to process block",
-                block_height=block["height"],
-                error=str(e),
+                block_height=block.block_height,
+                error=e,
                 traceback=traceback.format_exc()
             )
             raise e
 
-    def send_to_stream(self, transactions: List[dict]):
+    def send_to_stream(self, transactions: dict):
         """Send processed transactions to Kafka stream"""
         try:
             for tx in transactions:
-                partition = self.partitioner(tx["block_height"])
+                partition = self.partitioner(tx['block_height'])
                 self.producer.produce(
                     topic=self.topic_name,
-                    key=tx["tx_id"],
+                    key=tx['tx_id'],
                     value=json.dumps(tx),
                     partition=partition,
-                    timestamp=int(tx["timestamp"] * 1000)
+                    timestamp=int(tx['timestamp'] * 1000)
                 )
             self.producer.flush()
 
@@ -221,27 +203,31 @@ class BlockStream:
         try:
             # Get blocks for window
             end_height = start_height + self.window_size - 1
-            blocks = self.bitcoin_node.get_blocks_by_height_range(start_height, end_height)
-            #TDODO: parse block data here !!!
+            blocks : List[Block] = [parse_block_data(block) for block in self.bitcoin_node.get_blocks_by_height_range(start_height, end_height)]
 
             if not blocks:
                 return False
 
-            #self.producer.tx_cache.cache_block(blocks)
-            #for block in blocks:
-            #    for tx in block["tx"]:
-            #        self.producer.tx_cache.cache_transaction(block['height'], tx)
+            tx_ids = []
 
-            # Process each block in window
             for block in blocks:
-                if self.state_manager.check_if_block_height_is_indexed(block["height"]):
-                    logger.info(f"Skipping block. Already indexed.", block_height=block["height"])
+                for tx in block.transactions:
+                    for vin in tx.vins:
+                        if vin.tx_id != 0 and vin.tx_id not in tx_ids:
+                            tx_ids.append((vin.tx_id, vin.vout_id))
+
+            tx_cache = bitcoin_node.get_addresses_and_amounts_by_txouts(tx_ids)
+
+            for block in blocks:
+
+                if self.state_manager.check_if_block_height_is_indexed(block.block_height):
+                    logger.info(f"Skipping block. Already indexed.", block_height=block.block_height)
                     continue
 
-                transactions = self.producer.process_block(block)
+                transactions = self.producer.process_block(block, tx_cache)
                 if transactions:
                     self.producer.send_to_stream(transactions)
-                    self.state_manager.add_block_height(block["height"])
+                    self.state_manager.add_block_height(block.block_height)
 
             return True
 

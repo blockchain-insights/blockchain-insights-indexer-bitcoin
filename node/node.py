@@ -194,41 +194,21 @@ class BitcoinNode(Node):
 
         return tx
 
-    def process_in_memory_txn_for_indexing(self, tx):
+    def process_in_memory_txn_for_indexing(self, tx: Transaction):
         input_amounts = {}  # input amounts by address in satoshi
         output_amounts = {}  # output amounts by address in satoshi
 
-        for vin in tx['vin']:
-            if vin['txid'] == 0:
+        for vin in tx.vins:
+            if vin.tx_id == 0:
                 continue
-            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin['txid'], str(vin['vout']))
+
+            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin.tx_id, str(vin.vout_id))
             input_amounts[address] = input_amounts.get(address, 0) + amount
 
-        for vout in tx['vout']:
-            amount = vout['value'] * SATOSHI
-
-            script_type = vout["scriptPubKey"].get("type", "")
-            if "nonstandard" in script_type or script_type == "nulldata":
-                continue
-
-            script_pub_key_asm = vout["scriptPubKey"].get("asm", "")
-            address = vout['scriptPubKey'].get('address', f"unknown-{tx['txid']}")
-
-            address = vout['address'] or f"unknown-{tx['txid']}"
+        for vout in tx.vouts:
+            address = vout.address
+            amount = vout.value_satoshi
             output_amounts[address] = output_amounts.get(address, 0) + amount
-
-        for address in input_amounts:
-            if address in output_amounts:
-                diff = input_amounts[address] - output_amounts[address]
-                if diff > 0:
-                    input_amounts[address] = diff
-                    output_amounts[address] = 0
-                elif diff < 0:
-                    output_amounts[address] = -diff
-                    input_amounts[address] = 0
-                else:
-                    input_amounts[address] = 0
-                    output_amounts[address] = 0
 
         input_addresses = [address for address, amount in input_amounts.items() if amount != 0]
         output_addresses = [address for address, amount in output_amounts.items() if amount != 0]
