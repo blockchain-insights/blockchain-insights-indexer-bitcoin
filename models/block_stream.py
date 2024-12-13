@@ -287,7 +287,6 @@ class BlockStream:
 # Main script section
 if __name__ == "__main__":
     import argparse
-    from sqlalchemy import text
     from dotenv import load_dotenv
     load_dotenv()
 
