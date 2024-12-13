@@ -364,17 +364,34 @@ if __name__ == "__main__":
         partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
         end_height = partition_end
 
-        # Find first non-indexed block in partition range
-        start_height = partition_start
-        while start_height <= partition_end:
-            if not state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
-                break
-            start_height += 1
-        
-        if start_height > partition_end:
+        # Find first gap in partition range using SQL
+        with state_manager.Session() as session:
+            result = session.execute(
+                text("""
+                    WITH partition_range AS (
+                        SELECT generate_series(:start, :end) AS block_height
+                    )
+                    SELECT MIN(pr.block_height)
+                    FROM partition_range pr
+                    LEFT JOIN block_stream_state bss ON 
+                        bss.block_height = pr.block_height 
+                        AND bss.topic = :topic
+                        AND bss.network = :network
+                    WHERE bss.block_height IS NULL
+                """),
+                {
+                    "start": partition_start,
+                    "end": partition_end,
+                    "topic": "transactions",
+                    "network": "bitcoin"
+                }
+            ).scalar()
+
+        if result is None:
             logger.info(f"Partition {args.partition} fully indexed. Exiting.")
             sys.exit(0)
-            
+
+        start_height = result
         logger.info(f"Starting from first non-indexed block {start_height} in partition {args.partition}")
 
         logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
