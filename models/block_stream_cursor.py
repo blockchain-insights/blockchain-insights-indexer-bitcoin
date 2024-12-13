@@ -30,7 +30,7 @@ class BlockStreamCursorManager:
     def close(self):
         self.engine.dispose()
 
-    def find_first_gap(self, start_height: int, end_height: int = None, topic=BLOCK_STREAM_TOPIC_NAME, network="bitcoin") -> int:
+    def find_first_gap(self, start_height: int, end_height: int = None, topic="transactions", network="bitcoin") -> int:
         """Find the first non-indexed block height in the given range"""
         with self.Session() as session:
             # Build query for blocks in range
