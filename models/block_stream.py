@@ -292,7 +292,8 @@ if __name__ == "__main__":
     load_dotenv()
 
     parser = argparse.ArgumentParser(description='Bitcoin Block Stream Processor')
-    parser.add_argument('--start-height', type=int, default=0, help='Starting block height (default: 0)')
+    parser.add_argument('--partition', type=int, help='Specific partition to index')
+    parser.add_argument('--start-height', type=int, help='Starting block height (optional)')
     parser.add_argument('--end-height', type=int, help='Ending block height (optional)')
     args = parser.parse_args()
 
@@ -348,12 +349,35 @@ if __name__ == "__main__":
     producer = BlockStreamProducer(kafka_config, bitcoin_node, db_url, terminate_event=terminate_event)
     logger.info("Starting block stream")
 
-    # Align start height to partition boundaries, but keep exact end height
-    aligned_start = producer.partitioner.align_height_to_partition(args.start_height)
-    end_height = args.end_height  # Use exact end height specified by user
+    # Determine start and end heights based on partition or last indexed block
+    if args.partition is not None:
+        partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
+        start_height = args.start_height if args.start_height is not None else partition_start
+        end_height = args.end_height if args.end_height is not None else partition_end
+        
+        # Ensure heights are within partition bounds
+        if start_height < partition_start or start_height > partition_end:
+            logger.error(f"Start height {start_height} is outside partition {args.partition} range ({partition_start}-{partition_end})")
+            sys.exit(1)
+        if end_height > partition_end:
+            logger.warning(f"End height {end_height} exceeds partition {args.partition} range, limiting to {partition_end}")
+            end_height = partition_end
+    else:
+        # Find the last indexed block
+        current_height = bitcoin_node.get_current_block_height()
+        start_height = 0
+        for height in range(current_height, -1, -1):
+            if state_manager.check_if_block_height_is_indexed(height, topic="transactions"):
+                start_height = height + 1
+                break
+        end_height = args.end_height
 
-    # Find the first non-indexed block in our range
-    start_height = aligned_start
+    # Validate start height is before end height
+    if end_height is not None and start_height > end_height:
+        logger.error(f"Start height {start_height} is after end height {end_height}")
+        sys.exit(1)
+
+    # Find the first non-indexed block from our start point
     while start_height <= (end_height or bitcoin_node.get_current_block_height()):
         if not state_manager.check_if_block_height_is_indexed(start_height, topic="transactions"):
             break
@@ -363,11 +387,11 @@ if __name__ == "__main__":
         sys.exit(0)
 
     logger.info(
-        f"Starting block stream from height {start_height} to {'infinity' if end_height is None else end_height}",
+        "Starting block stream",
         extra={
-            "requested_start": args.start_height,
-            "aligned_start": aligned_start,
-            "actual_start": start_height
+            "start_height": start_height,
+            "end_height": end_height if end_height is not None else "infinity",
+            "partition": args.partition if args.partition is not None else "all",
         }
     )
     
