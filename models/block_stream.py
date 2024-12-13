@@ -198,6 +198,7 @@ class BlockStream:
         self.state_manager = state_manager
         self.terminate_event = terminate_event
         self.window_size = window_size
+        self.end_height = end_height
 
     def process_window(self, start_height: int) -> bool:
         """Process a window of blocks"""
