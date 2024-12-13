@@ -293,8 +293,6 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Bitcoin Block Stream Processor')
     parser.add_argument('--partition', type=int, help='Specific partition to index')
-    parser.add_argument('--start-height', type=int, help='Starting block height (optional)')
-    parser.add_argument('--end-height', type=int, help='Ending block height (optional)')
     args = parser.parse_args()
 
     def patch_record(record):
@@ -352,16 +350,9 @@ if __name__ == "__main__":
     # Determine start and end heights based on partition or last indexed block
     if args.partition is not None:
         partition_start, partition_end = producer.partitioner.get_partition_range(args.partition)
-        start_height = args.start_height if args.start_height is not None else partition_start
-        end_height = args.end_height if args.end_height is not None else partition_end
-        
-        # Ensure heights are within partition bounds
-        if start_height < partition_start or start_height > partition_end:
-            logger.error(f"Start height {start_height} is outside partition {args.partition} range ({partition_start}-{partition_end})")
-            sys.exit(1)
-        if end_height > partition_end:
-            logger.warning(f"End height {end_height} exceeds partition {args.partition} range, limiting to {partition_end}")
-            end_height = partition_end
+        start_height = partition_start
+        end_height = partition_end
+        logger.info(f"Using partition {args.partition} range: {partition_start} - {partition_end}")
     else:
         # Find the last indexed block
         current_height = bitcoin_node.get_current_block_height()
@@ -370,12 +361,7 @@ if __name__ == "__main__":
             if state_manager.check_if_block_height_is_indexed(height, topic="transactions"):
                 start_height = height + 1
                 break
-        end_height = args.end_height
-
-    # Validate start height is before end height
-    if end_height is not None and start_height > end_height:
-        logger.error(f"Start height {start_height} is after end height {end_height}")
-        sys.exit(1)
+        end_height = None
 
     # Find the first non-indexed block from our start point
     while start_height <= (end_height or bitcoin_node.get_current_block_height()):
@@ -390,8 +376,8 @@ if __name__ == "__main__":
         "Starting block stream",
         extra={
             "start_height": start_height,
-            "end_height": end_height if end_height is not None else "infinity",
-            "partition": args.partition if args.partition is not None else "all",
+            "end_height": "infinity" if end_height is None else end_height,
+            "partition": "all" if args.partition is None else args.partition,
         }
     )
     
