@@ -14,17 +14,20 @@ class BlockStreamConsumerBase:
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  terminate_event,
-                 start_partition: int):
+                 consumer_name: str,
+                 partition: Optional[int] = None,
+                 is_live_mode: bool = False):
 
         self.consumer = Consumer(kafka_config)
         self.block_stream_cursor_manager = block_stream_cursor_manager
         self.terminate_event = terminate_event
+        self.consumer_name = consumer_name
+        self.assigned_partition = partition
+        self.is_live_mode = is_live_mode
 
         self.current_partition: Optional[int] = None
         self.last_processed_block = defaultdict(int)
-
         self.BLOCKS_PER_YEAR = 52560
-        self.start_partition = start_partition
 
     def get_partition_range(self, partition: int) -> tuple[int, int]:
         start = partition * self.BLOCKS_PER_YEAR
@@ -37,59 +40,126 @@ class BlockStreamConsumerBase:
             return 0
         return cursor.offset + 1
 
-    def on_assign(self, consumer, partitions):
-        sorted_partitions = sorted(partitions, key=lambda p: p.partition)
-        partition_offsets = {}
-        for partition in sorted_partitions:
-            starting_offset = self.initialize_partition_state(partition.partition)
-            partition.offset = starting_offset
-            partition_offsets[partition.partition] = starting_offset
-
-            start_block, end_block = self.get_partition_range(partition.partition)
-            logger.info("Partition range",
-                        partition=partition.partition,
-                        start_block=start_block,
-                        end_block=end_block,
-                        starting_offset=starting_offset)
-
-        if not self.current_partition:
-            active_partitions = [(p.partition, partition_offsets[p.partition])
-                                 for p in sorted_partitions
-                                 if partition_offsets[p.partition] > 0]
-
-            if active_partitions:
-                self.current_partition = max(active_partitions, key=lambda x: x[0])[0]
-            else:
-                self.current_partition = sorted_partitions[self.start_partition].partition
-
-            current_partition = next(p for p in sorted_partitions
-                                     if p.partition == self.current_partition)
-
-            consumer.assign([current_partition])
-            logger.info("Starting consumption",
-                        partition=self.current_partition,
-                        starting_offset=current_partition.offset,
-                        selection_reason="highest_active" if active_partitions else "first_available")
-            return
-
-        logger.info("No partitions ready for processing")
-        consumer.assign([])
-
     def check_next_partition(self, next_partition: int) -> bool:
         tp = TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, 0)
         low, high = self.consumer.get_watermark_offsets(tp)
         return high > 0
 
-    def run(self):
+    def move_to_next_partition(self, next_partition: int):
         try:
-            self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
+            current_partition = self.current_partition
+            self.current_partition = next_partition
+            starting_offset = self.initialize_partition_state(next_partition)
+            new_assignment = [TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, starting_offset)]
+            self.consumer.assign(new_assignment)
+
+            start_block, end_block = self.get_partition_range(next_partition)
+            logger.info("Moving to next partition",
+                        previous_partition=current_partition,
+                        next_partition=next_partition,
+                        starting_offset=starting_offset,
+                        expected_block_range=(start_block, end_block))
+
+        except Exception as e:
+            logger.error("Error moving to next partition",
+                         current_partition=current_partition,
+                         traceback=traceback.format_exc(),
+                         error=str(e))
+            raise e
+
+    def on_assign(self, consumer, partitions):
+        if not self.is_live_mode:
+            partition = TopicPartition(BLOCK_STREAM_TOPIC_NAME, self.assigned_partition,
+                                       self.initialize_partition_state(self.assigned_partition))
+            consumer.assign([partition])
+            self.current_partition = self.assigned_partition
+            logger.info(f"Archive mode: Assigned to partition {self.assigned_partition}")
+            return
+
+        # Live mode: Find the most recent partition with activity
+        sorted_partitions = sorted(partitions, key=lambda p: p.partition)
+        partition_offsets = {}
+
+        for partition in sorted_partitions:
+            starting_offset = self.initialize_partition_state(partition.partition)
+            partition_offsets[partition.partition] = starting_offset
+
+            if starting_offset > 0:
+                # Found a partition with activity in the database
+                self.current_partition = partition.partition
+                partition.offset = starting_offset
+                consumer.assign([partition])
+                logger.info(
+                    "Live mode: Resuming from database state",
+                    partition=self.current_partition,
+                    offset=starting_offset
+                )
+                return
+
+        # If no previous state found, start with the earliest partition
+        first_partition = sorted_partitions[0]
+        self.current_partition = first_partition.partition
+        consumer.assign([first_partition])
+        logger.info(
+            "Live mode: No previous state found, starting from first partition",
+            partition=self.current_partition
+        )
+
+    def process_message(self, message) -> bool:
+        """Process a single message. Returns True if successful, False otherwise."""
+        try:
+            transaction = json.loads(message.value())
+
+            # Call the implementation-specific processing
+            self.process_transaction(transaction)
+
+            # Update consumer state
+            self.consumer.commit(message)
+            self.block_stream_cursor_manager.set_cursor(
+                message.partition(),
+                message.offset(),
+                datetime.now()
+            )
+
+            self.last_processed_block[message.partition()] = transaction["block_height"]
+
+            logger.info("Processed transaction",
+                        block_height=transaction["block_height"],
+                        tx_id=transaction["tx_id"],
+                        partition=message.partition(),
+                        offset=message.offset())
+
+            return True
+
+        except Exception as e:
+            logger.error(
+                "Error processing message",
+                error=str(e),
+                traceback=traceback.format_exc(),
+                partition=message.partition(),
+                offset=message.offset()
+            )
+            return False
+
+    def run(self):
+        """Main processing loop"""
+        try:
+            if self.is_live_mode:
+                self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
+            else:
+                partition = TopicPartition(BLOCK_STREAM_TOPIC_NAME, self.assigned_partition,
+                                           self.initialize_partition_state(self.assigned_partition))
+                self.consumer.assign([partition])
+                self.current_partition = self.assigned_partition
+
             consecutive_empty_polls = 0
             while not self.terminate_event.is_set():
                 message = self.consumer.poll(timeout=1.0)
                 if message is None:
                     consecutive_empty_polls += 1
 
-                    if consecutive_empty_polls >= 3 and self.last_processed_block[self.current_partition] > 0:
+                    if self.is_live_mode and consecutive_empty_polls >= 3 and self.last_processed_block[
+                        self.current_partition] > 0:
                         _, end_block = self.get_partition_range(self.current_partition)
                         if self.last_processed_block[self.current_partition] >= end_block:
                             next_partition = self.current_partition + 1
@@ -112,62 +182,9 @@ class BlockStreamConsumerBase:
         finally:
             self.consumer.close()
 
-    def process_message(self, message):
-        partition = message.partition()
-        offset = message.offset()
-
-        try:
-            transaction = json.loads(message.value())
-            block_height = transaction["block_height"]
-
-            self.index_transaction(tx=transaction)
-            self.consumer.commit(message)
-            self.block_stream_cursor_manager.set_cursor(
-                partition,
-                offset,
-                datetime.now()
-            )
-
-            self.last_processed_block[partition] = block_height
-
-            logger.info("Processed transaction",
-                        block_height=block_height,
-                        tx_id=transaction["tx_id"],
-                        partition=partition,
-                        offset=offset)
-
-            return True
-        except Exception as e:
-            logger.error(
-                "Error processing message",
-                error=str(e),
-                tbl=traceback.format_exc(),
-                partition=partition,
-                offset=offset
-            )
-            return False
-
-    def move_to_next_partition(self, next_partition: int):
-        try:
-            current_partition = self.current_partition
-            self.current_partition = next_partition
-            starting_offset = self.initialize_partition_state(next_partition)
-            new_assignment = [TopicPartition(BLOCK_STREAM_TOPIC_NAME, next_partition, starting_offset)]
-            self.consumer.assign(new_assignment)
-
-            start_block, end_block = self.get_partition_range(next_partition)
-            logger.info("Moving to next partition",
-                        previous_partition=current_partition,
-                        next_partition=next_partition,
-                        starting_offset=starting_offset,
-                        expected_block_range=(start_block, end_block))
-
-        except Exception as e:
-            logger.error("Error moving to next partition",
-                         current_partition=current_partition,
-                         tbl=traceback.format_exc(),
-                         error=str(e))
-            raise e
-
-    def index_transaction(self, tx):
-       pass
+    def process_transaction(self, transaction: Dict):
+        """
+        Abstract method to be implemented by specific consumers.
+        Processes a single transaction.
+        """
+        raise NotImplementedError("Subclasses must implement process_transaction")

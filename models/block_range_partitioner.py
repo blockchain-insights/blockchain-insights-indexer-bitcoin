@@ -18,11 +18,6 @@ class BlockRangePartitioner:
         partition = block_height // self.range_size
         if partition >= self.num_partitions:
             partition = self.num_partitions - 1
-        if block_height % self.range_size == 0:
-            logger.info("Reached partition boundary",
-                        block_height=block_height,
-                        partition=partition,
-                        year_number=partition + 1)
         return int(partition)
 
     def get_partition_range(self, partition):

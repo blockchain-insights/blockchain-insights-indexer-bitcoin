@@ -9,24 +9,30 @@ from neo4j import Driver, GraphDatabase
 from typing_extensions import LiteralString
 from models.block_stream_consumer_base import BlockStreamConsumerBase
 from models.block_stream_cursor import BlockStreamCursorManager
-from typing import Dict, Any
+from typing import Dict
 
 
 class BlockStreamConsumer(BlockStreamConsumerBase):
     def __init__(self,
-                 kafka_config: Dict[str, Any],
+                 kafka_config: Dict,
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  graph_database: Driver,
                  terminate_event,
-                 partition):
+                 partition: int = None,
+                 is_live_mode: bool = False):
 
-        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event, partition)
-
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='money-flow-consumer',
+            partition=partition,
+            is_live_mode=is_live_mode
+        )
         self.graph_database = graph_database
-        self.CONSUMER_NAME = 'money-flow-consumer'
 
-    def index_transaction(self, tx):
-
+    def process_transaction(self, tx: Dict):
+        """Implementation of transaction processing specific to money flow consumer"""
         query: LiteralString = """
             MERGE (t:Transaction {tx_id: $tx_id})
             ON CREATE SET 
@@ -60,14 +66,13 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
         with self.graph_database.session() as session:
             try:
                 session.run(query, parameters={
-                            "tx_id": tx["tx_id"],
-                            "timestamp": tx["timestamp"],
-                            "block_height": tx["block_height"],
-                            "is_coinbase": tx["is_coinbase"],
-                            "vins": tx["vins"],
-                            "vouts": tx["vouts"]
-                        })
-
+                    "tx_id": tx["tx_id"],
+                    "timestamp": tx["timestamp"],
+                    "block_height": tx["block_height"],
+                    "is_coinbase": tx["is_coinbase"],
+                    "vins": tx["vins"],
+                    "vouts": tx["vouts"]
+                })
             except Exception as e:
                 logger.error(f"Error indexing transaction: {e}")
                 raise e
@@ -76,30 +81,37 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
 if __name__ == "__main__":
     terminate_event = threading.Event()
 
+
     def shutdown_handler(signum, frame):
-        logger.info(
-            "Shutdown signal received. Waiting for current processing to complete."
-        )
+        logger.info("Shutdown signal received. Waiting for current processing to complete.")
         terminate_event.set()
 
 
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description='Process archive mode settings.')
-    parser.add_argument(
-        '--archive',
-        action='store_true',
-        help='Run in archive mode'
-    )
+    parser = argparse.ArgumentParser(description='Bitcoin Block Stream Consumer')
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument('--money-flow-archive', action='store_true',
+                            help='Run in archive mode')
+    mode_group.add_argument('--money-flow-live', action='store_true',
+                            help='Run in live mode')
+
+    parser.add_argument('--partition', type=int,
+                        help='Partition number to process (required for archive mode)')
 
     args = parser.parse_args()
-    archive = args.archive
 
-    service_name = 'money-flow-archive-consumer' if archive else 'money-flow-live-consumer'
+    is_live_mode = args.money_flow_live
+
+    # Validate arguments
+    if not is_live_mode and args.partition is None:
+        parser.error("--partition is required when using --money-flow-archive")
+
+    base_name = 'money-flow-live' if is_live_mode else 'money-flow-archive'
+    service_name = f'{base_name}-partition-{args.partition}-consumer' if args.partition is not None else f'{base_name}-consumer'
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-
 
     def patch_record(record):
         record["extra"]["service"] = service_name
@@ -121,6 +133,7 @@ if __name__ == "__main__":
         filter=patch_record
     )
 
+    # Initialize components
     db_url = os.getenv(
         "REDPANDA_DB_CONNECTION_STRING",
         "postgresql://postgres:changeit456$@localhost:5420/block_stream"
@@ -130,10 +143,6 @@ if __name__ == "__main__":
         "localhost:19092"
     )
 
-    partition_start = 0
-    if not archive:
-        partition_start = os.getenv("MONEY_FLOW_LIVE_PARTITION_START", 13)
-
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
     kafka_config = {
@@ -141,18 +150,24 @@ if __name__ == "__main__":
         'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
-        'max.partition.fetch.bytes': 10485760,  # 10MB
-        'fetch.max.bytes': 10485760,  # Modern setting replacing fetch.message.max.bytes
-        'receive.message.max.bytes': 10486272  # Must be >= fetch.max.bytes + 512
+        'max.partition.fetch.bytes': 10485760,
+        'fetch.max.bytes': 10485760,
+        'receive.message.max.bytes': 10486272
     }
 
     graph_db_url = os.getenv(
-        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_URL",
+        "MONEY_FLOW_MEMGRAPH_ARCHIVE_URL" if not is_live_mode else "MONEY_FLOW_MEMGRAPH_LIVE_URL",
         "bolt://localhost:7688"
     )
 
-    graph_db_user = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_USER", "memgraph")
-    graph_db_password = os.getenv("MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if archive else "MONEY_FLOW_MEMGRAPH_LIVE_PASSWORD", "memgraph")
+    graph_db_user = os.getenv(
+        "MONEY_FLOW_MEMGRAPH_ARCHIVE_USER" if not is_live_mode else "MONEY_FLOW_MEMGRAPH_LIVE_USER",
+        "memgraph"
+    )
+    graph_db_password = os.getenv(
+        "MONEY_FLOW_MEMGRAPH_ARCHIVE_PASSWORD" if not is_live_mode else "MONEY_FLOW_MEMGRAPH_LIVE_PASSWORD",
+        "memgraph"
+    )
 
     graph_database = GraphDatabase.driver(
         graph_db_url,
@@ -167,7 +182,8 @@ if __name__ == "__main__":
             block_stream_cursor_manager,
             graph_database,
             terminate_event,
-            partition_start
+            args.partition,
+            is_live_mode
         )
         consumer.run()
     except Exception as e:
@@ -176,4 +192,3 @@ if __name__ == "__main__":
         block_stream_cursor_manager.close()
         graph_database.close()
         logger.info("Money flow indexer consumer stopped")
-
