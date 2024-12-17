@@ -75,7 +75,7 @@ services:
     volumes:
       - transaction-stream-clickhouse-data:/var/lib/clickhouse
       - transaction-stream-clickhouse-logs:/var/log/clickhouse-server
-      - "./init-clickhouse.sql:/docker-entrypoint-initdb.d/init-clickhouse.sql:ro"
+      - "./init-clickhouse.sql:/docker-entrypoint-initdb.d/init-clickhouse.sql"
     environment:
       - CLICKHOUSE_DB=${TRANSACTION_STREAM_CLICKHOUSE_DB:-transaction_stream}
       - CLICKHOUSE_USER=${TRANSACTION_STREAM_CLICKHOUSE_USER:-default}

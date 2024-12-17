@@ -81,24 +81,17 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
 if __name__ == "__main__":
     terminate_event = threading.Event()
 
-
     def shutdown_handler(signum, frame):
         logger.info("Shutdown signal received. Waiting for current processing to complete.")
         terminate_event.set()
-
 
     load_dotenv()
 
     parser = argparse.ArgumentParser(description='Bitcoin Block Stream Consumer')
     mode_group = parser.add_mutually_exclusive_group(required=True)
-    mode_group.add_argument('--money-flow-archive', action='store_true',
-                            help='Run in archive mode')
-    mode_group.add_argument('--money-flow-live', action='store_true',
-                            help='Run in live mode')
-
-    parser.add_argument('--partition', type=int,
-                        help='Partition number to process (required for archive mode)')
-
+    mode_group.add_argument('--money-flow-archive', action='store_true', help='Run in archive mode')
+    mode_group.add_argument('--money-flow-live', action='store_true', help='Run in live mode')
+    parser.add_argument('--partition', type=int, help='Partition number to process (required for archive mode)')
     args = parser.parse_args()
 
     is_live_mode = args.money_flow_live

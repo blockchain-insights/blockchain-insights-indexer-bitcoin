@@ -1,7 +1,7 @@
 from loguru import logger
 from models import BLOCK_STREAM_TOPIC_NAME
 from models.block_stream_cursor import BlockStreamCursorManager
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from confluent_kafka import Consumer, TopicPartition
 from datetime import datetime
 from collections import defaultdict
@@ -16,7 +16,9 @@ class BlockStreamConsumerBase:
                  terminate_event,
                  consumer_name: str,
                  partition: Optional[int] = None,
-                 is_live_mode: bool = False):
+                 is_live_mode: bool = False,
+                 batch_size: int = 1000,
+                 poll_timeout: float = 1.0):
 
         self.consumer = Consumer(kafka_config)
         self.block_stream_cursor_manager = block_stream_cursor_manager
@@ -24,6 +26,8 @@ class BlockStreamConsumerBase:
         self.consumer_name = consumer_name
         self.assigned_partition = partition
         self.is_live_mode = is_live_mode
+        self.batch_size = batch_size
+        self.poll_timeout = poll_timeout
 
         self.current_partition: Optional[int] = None
         self.last_processed_block = defaultdict(int)
@@ -105,57 +109,65 @@ class BlockStreamConsumerBase:
             partition=self.current_partition
         )
 
-    def process_message(self, message) -> bool:
-        """Process a single message. Returns True if successful, False otherwise."""
+    def process_message_batch(self, messages: List) -> bool:
+        """Process a batch of messages. Returns True if successful, False otherwise."""
         try:
-            transaction = json.loads(message.value())
+            transactions = []
+            latest_message = None
 
-            # Call the implementation-specific processing
-            self.process_transaction(transaction)
+            # Prepare batch of transactions
+            for message in messages:
+                transaction = json.loads(message.value())
+                transactions.append(transaction)
+                latest_message = message  # Keep track of the latest message for committing
 
-            # Update consumer state
-            self.consumer.commit(message)
-            self.block_stream_cursor_manager.set_cursor(
-                message.partition(),
-                message.offset(),
-                datetime.now()
-            )
+            # Process the batch of transactions
+            self.process_transactions(transactions)
 
-            self.last_processed_block[message.partition()] = transaction["block_height"]
+            # Update consumer state with the latest processed message
+            if latest_message:
+                self.consumer.commit(latest_message)
+                self.block_stream_cursor_manager.set_cursor(
+                    latest_message.partition(),
+                    latest_message.offset(),
+                    datetime.now()
+                )
+                self.last_processed_block[latest_message.partition()] = transactions[-1]["block_height"]
 
-            logger.info("Processed transaction",
-                        block_height=transaction["block_height"],
-                        tx_id=transaction["tx_id"],
-                        partition=message.partition(),
-                        offset=message.offset())
+            logger.info("Processed batch of transactions",
+                       batch_size=len(transactions),
+                       last_block_height=transactions[-1]["block_height"] if transactions else None,
+                       partition=latest_message.partition() if latest_message else None,
+                       last_offset=latest_message.offset() if latest_message else None)
 
             return True
 
         except Exception as e:
             logger.error(
-                "Error processing message",
+                "Error processing message batch",
                 error=str(e),
                 traceback=traceback.format_exc(),
-                partition=message.partition(),
-                offset=message.offset()
+                batch_size=len(messages)
             )
             return False
 
     def run(self):
-        """Main processing loop"""
+        """Main processing loop with batch processing"""
         try:
             if self.is_live_mode:
                 self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
             else:
-                partition = TopicPartition(BLOCK_STREAM_TOPIC_NAME, self.assigned_partition,
-                                           self.initialize_partition_state(self.assigned_partition))
+                partition = TopicPartition(BLOCK_STREAM_TOPIC_NAME, self.assigned_partition, self.initialize_partition_state(self.assigned_partition))
                 self.consumer.assign([partition])
                 self.current_partition = self.assigned_partition
 
             consecutive_empty_polls = 0
+
             while not self.terminate_event.is_set():
-                message = self.consumer.poll(timeout=1.0)
-                if message is None:
+                # Fetch multiple messages at once
+                messages = self.consumer.consume(num_messages=self.batch_size, timeout=self.poll_timeout)
+
+                if not messages:
                     consecutive_empty_polls += 1
 
                     if self.is_live_mode and consecutive_empty_polls >= 3 and self.last_processed_block[
@@ -168,12 +180,19 @@ class BlockStreamConsumerBase:
                     continue
 
                 consecutive_empty_polls = 0
-                if message.error():
-                    logger.error("Consumer error", error=message.error())
-                    break
 
-                if message.partition() == self.current_partition:
-                    if not self.process_message(message):
+                # Filter messages for current partition and check for errors
+                current_partition_messages = []
+                for message in messages:
+                    if message.error():
+                        logger.error("Consumer error", error=message.error())
+                        return
+                    if message.partition() == self.current_partition:
+                        current_partition_messages.append(message)
+
+                # Process filtered messages if any
+                if current_partition_messages:
+                    if not self.process_message_batch(current_partition_messages):
                         break
 
         except Exception as e:
@@ -182,7 +201,7 @@ class BlockStreamConsumerBase:
         finally:
             self.consumer.close()
 
-    def process_transaction(self, transaction: Dict):
+    def process_transactions(self, transactions: List[Dict]):
         """
         Abstract method to be implemented by specific consumers.
         Processes a single transaction.

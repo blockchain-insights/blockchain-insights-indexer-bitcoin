@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import signal
@@ -7,7 +8,7 @@ from loguru import logger
 from models.balance_tracking.transaction_indexer import TransactionIndexer
 from models.block_stream_consumer_base import BlockStreamConsumerBase
 from models.block_stream_cursor import BlockStreamCursorManager
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 class BlockStreamConsumer(BlockStreamConsumerBase):
@@ -15,31 +16,49 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  transaction_indexer: TransactionIndexer,
-                 terminate_event):
-        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event, 0)
+                 terminate_event,
+                 partition: int = None,
+                 is_live_mode: bool = False,
+                 batch_size: int = 1000):
+
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='transaction-stream-consumer',
+            partition=partition,
+            is_live_mode=is_live_mode,
+            batch_size=batch_size
+        )
+
         self.transaction_indexer = transaction_indexer
 
-    def index_transaction(self, tx):
-        self.transaction_indexer.index_transaction(tx)
+    def process_transactions(self, transactions: List[Dict]):
+        self.transaction_indexer.index_transactions_in_batches(transactions)
 
 
 if __name__ == "__main__":
     terminate_event = threading.Event()
 
     def shutdown_handler(signum, frame):
-        logger.info(
-            "Shutdown signal received. Waiting for current processing to complete."
-        )
+        logger.info("Shutdown signal received. Waiting for current processing to complete.")
         terminate_event.set()
-
 
     load_dotenv()
 
-    service_name = 'transaction-consumer'
+    parser = argparse.ArgumentParser(description='Bitcoin Block Stream Consumer')
+    parser.add_argument('--live', action='store_true', default=False, help='Run in live mode')
+    parser.add_argument('--partition', default=0, type=int, help='Partition number to process')
+    args = parser.parse_args()
+
+    is_live_mode = args.live
+    if not is_live_mode and args.partition is None:
+        parser.error("--partition is required when using --money-flow-archive")
+
+    service_name = 'transaction-stream-consumer'
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-
 
     def patch_record(record):
         record["extra"]["service"] = service_name
@@ -73,8 +92,14 @@ if __name__ == "__main__":
 
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
-    timeseries_db_url = os.getenv("TIMESERIES_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5432/timeseries")
-    transaction_indexer = TransactionIndexer(timeseries_db_url)
+    connection_params = {
+        "host": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_HOST", "localhost"),
+        "port": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PORT", "8123"),
+        "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
+        "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
+        "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$")
+    }
+    transaction_indexer = TransactionIndexer(connection_params)
 
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
@@ -91,7 +116,10 @@ if __name__ == "__main__":
             kafka_config,
             block_stream_cursor_manager,
             transaction_indexer,
-            terminate_event
+            terminate_event,
+            args.partition,
+            is_live_mode,
+            1
         )
         consumer.run()
     except Exception as e:

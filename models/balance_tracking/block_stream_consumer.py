@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    service_name = 'transaction-consumer'
+    service_name = 'balance-tracking-consumer'
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
