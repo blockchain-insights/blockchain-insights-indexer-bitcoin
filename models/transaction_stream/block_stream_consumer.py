@@ -6,19 +6,41 @@ import threading
 from dotenv import load_dotenv
 from loguru import logger
 from models.transaction_stream.transaction_indexer import TransactionIndexer
-from models.block_stream_consumer_base import BlockStreamConsumerBase
+from models.block_stream_consumer_base import PartitionBasedConsumer, LiveBlockStreamConsumer
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any, List
 
 
-class BlockStreamConsumer(BlockStreamConsumerBase):
+class TransactionStreamLiveConsumer(LiveBlockStreamConsumer):
     def __init__(self,
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  transaction_indexer: TransactionIndexer,
                  terminate_event,
                  partition: int = None,
-                 is_live_mode: bool = False,
+                 batch_size: int = 1000):
+
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='transaction-stream-consumer',
+            batch_size=batch_size
+        )
+
+        self.transaction_indexer = transaction_indexer
+
+    def process_transactions(self, transactions: List[Dict]):
+        self.transaction_indexer.index_transactions_in_batches(transactions)
+
+
+class TransactionStreamArchiveConsumer(PartitionBasedConsumer):
+    def __init__(self,
+                 kafka_config: Dict[str, Any],
+                 block_stream_cursor_manager: BlockStreamCursorManager,
+                 transaction_indexer: TransactionIndexer,
+                 terminate_event,
+                 partition: int = None,
                  batch_size: int = 1000):
 
         super().__init__(
@@ -27,7 +49,6 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
             terminate_event=terminate_event,
             consumer_name='transaction-stream-consumer',
             partition=partition,
-            is_live_mode=is_live_mode,
             batch_size=batch_size
         )
 
@@ -112,16 +133,25 @@ if __name__ == "__main__":
     }
 
     try:
-        consumer = BlockStreamConsumer(
-            kafka_config,
-            block_stream_cursor_manager,
-            transaction_indexer,
-            terminate_event,
-            args.partition,
-            is_live_mode,
-            1000
-        )
-        consumer.run()
+        if is_live_mode:
+            consumer = TransactionStreamLiveConsumer(
+                kafka_config,
+                block_stream_cursor_manager,
+                transaction_indexer,
+                terminate_event,
+                1000
+            )
+            consumer.run()
+        else:
+            consumer = TransactionStreamArchiveConsumer(
+                kafka_config,
+                block_stream_cursor_manager,
+                transaction_indexer,
+                terminate_event,
+                args.partition,
+                1000
+            )
+            consumer.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:

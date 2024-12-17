@@ -7,32 +7,21 @@ from dotenv import load_dotenv
 from loguru import logger
 from neo4j import Driver, GraphDatabase
 from typing_extensions import LiteralString
-from models.block_stream_consumer_base import BlockStreamConsumerBase
+from models.block_stream_consumer_base import BlockStreamConsumerBase, PartitionBasedConsumer, LiveBlockStreamConsumer
 from models.block_stream_cursor import BlockStreamCursorManager
-from typing import Dict
+from typing import Dict, Any, List
 
 
-class BlockStreamConsumer(BlockStreamConsumerBase):
-    def __init__(self,
-                 kafka_config: Dict,
-                 block_stream_cursor_manager: BlockStreamCursorManager,
-                 graph_database: Driver,
-                 terminate_event,
-                 partition: int = None,
-                 is_live_mode: bool = False):
-
-        super().__init__(
-            kafka_config=kafka_config,
-            block_stream_cursor_manager=block_stream_cursor_manager,
-            terminate_event=terminate_event,
-            consumer_name='money-flow-consumer',
-            partition=partition,
-            is_live_mode=is_live_mode
-        )
+class MoneyFlowIndexer:
+    def __init__(self, graph_database: Driver):
         self.graph_database = graph_database
 
-    def process_transaction(self, tx: Dict):
-        """Implementation of transaction processing specific to money flow consumer"""
+    def index_transactions_in_batches(self, transactions):
+        with self.graph_database.session() as session:
+            for tx in transactions:
+                self.index_transaction(session, tx)
+
+    def index_transaction(self, session, tx):
         query: LiteralString = """
             MERGE (t:Transaction {tx_id: $tx_id})
             ON CREATE SET 
@@ -63,19 +52,64 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
             }]->(to_addr)
             """
 
-        with self.graph_database.session() as session:
-            try:
-                session.run(query, parameters={
-                    "tx_id": tx["tx_id"],
-                    "timestamp": tx["timestamp"],
-                    "block_height": tx["block_height"],
-                    "is_coinbase": tx["is_coinbase"],
-                    "vins": tx["vins"],
-                    "vouts": tx["vouts"]
-                })
-            except Exception as e:
-                logger.error(f"Error indexing transaction: {e}")
-                raise e
+        try:
+            session.run(query, parameters={
+                "tx_id": tx["tx_id"],
+                "timestamp": tx["timestamp"],
+                "block_height": tx["block_height"],
+                "is_coinbase": tx["is_coinbase"],
+                "vins": tx["vins"],
+                "vouts": tx["vouts"]
+            })
+        except Exception as e:
+            logger.error(f"Error indexing transaction: {e}")
+            raise e
+
+
+class MoneyFlowArchiveConsumer(PartitionBasedConsumer):
+    def __init__(self,
+                 kafka_config: Dict[str, Any],
+                 block_stream_cursor_manager: BlockStreamCursorManager,
+                 money_flow_indexer: MoneyFlowIndexer,
+                 terminate_event,
+                 partition: int,
+                 batch_size: int = 1000):
+
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='money-flow-consumer',
+            partition=partition,
+            batch_size=batch_size
+        )
+
+        self.money_flow_indexer = money_flow_indexer
+
+    def process_transactions(self, transactions: List[Dict]):
+        self.money_flow_indexer.index_transactions_in_batches(transactions)
+
+
+class MoneyFlowLiveConsumer(LiveBlockStreamConsumer):
+    def __init__(self,
+                 kafka_config: Dict[str, Any],
+                 block_stream_cursor_manager: BlockStreamCursorManager,
+                 money_flow_indexer: MoneyFlowIndexer,
+                 terminate_event,
+                 batch_size: int = 1000):
+
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='money-flow-consumer',
+            batch_size=batch_size
+        )
+
+        self.money_flow_indexer = money_flow_indexer
+
+    def process_transactions(self, transactions: List[Dict]):
+        self.money_flow_indexer.index_transactions_in_batches(transactions)
 
 
 if __name__ == "__main__":
@@ -169,16 +203,28 @@ if __name__ == "__main__":
         connection_acquisition_timeout=60
     )
 
+    money_flow_indexer = MoneyFlowIndexer(graph_database)
+
     try:
-        consumer = BlockStreamConsumer(
-            kafka_config,
-            block_stream_cursor_manager,
-            graph_database,
-            terminate_event,
-            args.partition,
-            is_live_mode
-        )
-        consumer.run()
+        if is_live_mode:
+            consumer = MoneyFlowLiveConsumer(
+                kafka_config,
+                block_stream_cursor_manager,
+                money_flow_indexer,
+                terminate_event,
+                1000
+            )
+            consumer.run()
+        else:
+            consumer = MoneyFlowArchiveConsumer(
+                kafka_config,
+                block_stream_cursor_manager,
+                money_flow_indexer,
+                terminate_event,
+                args.partition,
+                1000
+            )
+            consumer.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:

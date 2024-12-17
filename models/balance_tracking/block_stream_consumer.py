@@ -5,26 +5,25 @@ import threading
 from dotenv import load_dotenv
 from loguru import logger
 from models.balance_tracking.transaction_indexer import TransactionIndexer
-from models.block_stream_consumer_base import BlockStreamConsumerBase
+from models.block_stream_consumer_base import LiveBlockStreamConsumer
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any, List
 
 
-class BlockStreamConsumer(BlockStreamConsumerBase):
+class BalanceTrackingConsumer(LiveBlockStreamConsumer):
     def __init__(self,
                  kafka_config: Dict[str, Any],
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  transaction_indexer: TransactionIndexer,
-                 terminate_event):
+                 terminate_event,
+                 batch_size: int = 1000):
 
         super().__init__(
             kafka_config=kafka_config,
             block_stream_cursor_manager=block_stream_cursor_manager,
             terminate_event=terminate_event,
             consumer_name='balance-tracking-consumer',
-            partition=0,
-            is_live_mode=True,
-            batch_size=1000
+            batch_size=batch_size
         )
 
         self.transaction_indexer = transaction_indexer
@@ -99,7 +98,7 @@ if __name__ == "__main__":
     }
 
     try:
-        consumer = BlockStreamConsumer(
+        consumer = BalanceTrackingConsumer(
             kafka_config,
             block_stream_cursor_manager,
             transaction_indexer,
