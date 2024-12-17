@@ -143,9 +143,9 @@ if __name__ == "__main__":
         'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
-        'max.partition.fetch.bytes': 10485760,
-        'fetch.max.bytes': 10485760,
-        'receive.message.max.bytes': 10486272
+        'max.partition.fetch.bytes': 134217728,
+        'fetch.max.bytes': 134217728,
+        'receive.message.max.bytes': 134218240,  # + 512 bytes
     }
 
     graph_db_url = os.getenv(
@@ -184,4 +184,4 @@ if __name__ == "__main__":
     finally:
         block_stream_cursor_manager.close()
         graph_database.close()
-        logger.info("Money flow indexer consumer stopped")
+        logger.info("Indexer stopped")

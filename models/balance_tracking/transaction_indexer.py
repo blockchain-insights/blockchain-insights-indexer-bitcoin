@@ -1,12 +1,11 @@
-from datetime import datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Set
 from loguru import logger
 import clickhouse_connect
+from decimal import Decimal
 
 
 class TransactionIndexer:
     def __init__(self, connection_params: Dict[str, Any]):
-        # Convert connection params for clickhouse_connect
         self.client = clickhouse_connect.get_client(
             host=connection_params['host'],
             port=int(connection_params['port']),  # port needs to be int
@@ -15,104 +14,128 @@ class TransactionIndexer:
             database=connection_params['database']
         )
 
-    def _prepare_transaction_data(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Prepare transaction data for bulk insert"""
-        return [
-            {
-                'block_height': tx["block_height"],
-                'block_timestamp': datetime.fromtimestamp(tx["timestamp"]),
-                'tx_id': tx["tx_id"],
-                'tx_index': tx["tx_index"],
-                'is_coinbase': tx["is_coinbase"],
-                'in_total_amount': tx["in_total_amount"],
-                'out_total_amount': tx["out_total_amount"],
-                'fee_amount': 0 if tx["is_coinbase"] else tx["in_total_amount"] - tx["out_total_amount"],
-                'size': tx["size"],
-                'vsize': tx["vsize"],
-                'weight': tx["weight"]
-            }
-            for tx in transactions
+    def _collect_addresses(self, transactions: List[Dict[str, Any]]) -> Set[str]:
+        """Collect all unique addresses from transactions inputs and outputs"""
+        addresses = set()
+        for tx in transactions:
+            if not tx["is_coinbase"]:
+                for vin in tx["vins"]:
+                    addresses.add(vin["address"])
+            for vout in tx["vouts"]:
+                addresses.add(vout["address"])
+        return addresses
+
+    def _get_latest_balances(self, addresses: Set[str]) -> Dict[str, Tuple[int, Decimal]]:
+        """Get latest balance and block height for each address"""
+        query = """
+       SELECT address, block_height, balance
+       FROM balance_address_blocks
+       WHERE address IN %(addresses)s
+       ORDER BY block_height DESC
+       LIMIT 1 BY address
+       """
+        results = self.client.query(query, parameters={
+            'addresses': list(addresses)
+        })
+
+        balances = {}
+        for row in results.named_results():
+            address = row['address']
+            balances[address] = (row['block_height'], Decimal(str(row['balance'])))
+        return balances
+
+    def _calculate_changes_and_balances(self, transactions: List[Dict[str, Any]],
+                                        current_balances: Dict[str, Tuple[int, Decimal]]) -> Tuple[
+        List[List[Any]], List[List[Any]]]:
+        """Calculate balance changes and new balances"""
+        changes = []
+        new_balances = {}  # (address, block_height) -> balance
+
+        sorted_txs = sorted(transactions, key=lambda x: x["block_height"])
+
+        for tx in sorted_txs:
+            block_height = tx["block_height"]
+
+            # Process inputs (spending)
+            if not tx["is_coinbase"]:
+                for vin in tx["vins"]:
+                    address = vin["address"]
+                    amount = Decimal(str(vin["amount"]))
+
+                    # Record the spend
+                    changes.append([
+                        address,
+                        block_height,
+                        'transfer',
+                        -amount
+                    ])
+
+                    # Update balance
+                    last_balance = current_balances.get(address, (0, Decimal('0')))[1]
+                    if (address, block_height) in new_balances:
+                        last_balance = new_balances[(address, block_height)]
+                    new_balances[(address, block_height)] = last_balance - amount
+
+            # Process outputs (receiving)
+            for vout in tx["vouts"]:
+                address = vout["address"]
+                amount = Decimal(str(vout["amount"]))
+
+                # Record the receive
+                changes.append([
+                    address,
+                    block_height,
+                    'coinbase' if tx["is_coinbase"] else 'transfer',
+                    amount
+                ])
+
+                last_balance = current_balances.get(address, (0, Decimal('0')))[1]
+                if (address, block_height) in new_balances:
+                    last_balance = new_balances[(address, block_height)]
+                new_balances[(address, block_height)] = last_balance + amount
+
+        balances_list = [
+            [address, block_height, balance]
+            for (address, block_height), balance in sorted(new_balances.items())
+            if balance >= 0  # Enforce positive balance constraint
         ]
 
-    def _prepare_input_data(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Prepare inputs data for bulk insert"""
-        inputs_data = []
-        id_counter = 0
-        for tx in transactions:
-            for vin in tx["vins"]:
-                inputs_data.append({
-                    'id': id_counter,
-                    'tx_id': vin["tx_id"],
-                    'address': vin["address"],
-                    'amount': vin["amount"],
-                    'block_height': tx["block_height"]
-                })
-                id_counter += 1
-        return inputs_data
-
-    def _prepare_output_data(self, transactions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Prepare outputs data for bulk insert"""
-        outputs_data = []
-        id_counter = 0
-        for tx in transactions:
-            for vout in tx["vouts"]:
-                outputs_data.append({
-                    'id': id_counter,
-                    'tx_id': vout["tx_id"],
-                    'address': vout["address"],
-                    'amount': vout["amount"],
-                    'block_height': tx["block_height"]
-                })
-                id_counter += 1
-        return outputs_data
+        return changes, balances_list
 
     def index_transactions(self, transactions: List[Dict[str, Any]]):
         try:
             if not transactions:
                 return
 
-            # Prepare all data
-            tx_data = self._prepare_transaction_data(transactions)
-            input_data = self._prepare_input_data(transactions)
-            output_data = self._prepare_output_data(transactions)
+            addresses = self._collect_addresses(transactions)
+            current_balances = self._get_latest_balances(addresses)
 
-            # Extract columns and data for transactions
-            columns = ['block_height', 'block_timestamp', 'tx_id', 'tx_index',
-                       'is_coinbase', 'in_total_amount', 'out_total_amount',
-                       'fee_amount', 'size', 'vsize', 'weight']
+            balance_changes, new_balances = self._calculate_changes_and_balances(
+                transactions, current_balances
+            )
 
-            data = [
-                [row[col] for col in columns]
-                for row in tx_data
-            ]
+            if balance_changes:
+                change_columns = ['address', 'block_height', 'event', 'balance_delta']
+                self.client.insert('balance_changes', balance_changes, column_names=change_columns)
 
-            # Insert transactions
-            self.client.insert('transactions', data, column_names=columns)
-            logger.info(f"Inserted {len(tx_data)} transactions")
-
-            # Bulk insert inputs if any
-            if input_data:
-                input_columns = ['id', 'tx_id', 'address', 'amount', 'block_height']
-                input_rows = [
-                    [row[col] for col in input_columns]
-                    for row in input_data
-                ]
-                self.client.insert('transaction_inputs', input_rows, column_names=input_columns)
-                logger.info(f"Inserted {len(input_data)} transaction inputs")
-
-            # Bulk insert outputs if any
-            if output_data:
-                output_columns = ['id', 'tx_id', 'address', 'amount', 'block_height']
-                output_rows = [
-                    [row[col] for col in output_columns]
-                    for row in output_data
-                ]
-                self.client.insert('transaction_outputs', output_rows, column_names=output_columns)
-                logger.info(f"Inserted {len(output_data)} transaction outputs")
+            if new_balances:
+                balance_columns = ['address', 'block_height', 'balance']
+                self.client.insert('balance_address_blocks', new_balances, column_names=balance_columns)
 
         except Exception as e:
-            logger.error(f"Failed to index transactions batch: {str(e)}")
+            logger.error(f"Failed to index balances: {str(e)}")
             raise e
 
     def index_transactions_in_batches(self, transactions: List[Dict[str, Any]]):
-        self.index_transactions(transactions)
+        """Process transactions block by block in ascending order"""
+        block_groups = {}
+        for tx in transactions:
+            block_height = tx["block_height"]
+            if block_height not in block_groups:
+                block_groups[block_height] = []
+            block_groups[block_height].append(tx)
+
+        for block_height in sorted(block_groups.keys()):
+            block_txs = sorted(block_groups[block_height], key=lambda x: x["tx_index"])
+            self.index_transactions(block_txs)
+            logger.info(f"Processed block {block_height} with {len(block_txs)} transactions")

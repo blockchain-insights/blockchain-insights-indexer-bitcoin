@@ -5,7 +5,7 @@ import signal
 import threading
 from dotenv import load_dotenv
 from loguru import logger
-from models.balance_tracking.transaction_indexer import TransactionIndexer
+from models.transaction_stream.transaction_indexer import TransactionIndexer
 from models.block_stream_consumer_base import BlockStreamConsumerBase
 from models.block_stream_cursor import BlockStreamCursorManager
 from typing import Dict, Any, List
@@ -106,9 +106,9 @@ if __name__ == "__main__":
         'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
-        'max.partition.fetch.bytes': 10485760,  # 10MB
-        'fetch.max.bytes': 10485760,  # Modern setting replacing fetch.message.max.bytes
-        'receive.message.max.bytes': 10486272  # Must be >= fetch.max.bytes + 512
+        'max.partition.fetch.bytes': 134217728,
+        'fetch.max.bytes': 134217728,
+        'receive.message.max.bytes': 134218240,  # + 512 bytes
     }
 
     try:
@@ -119,11 +119,11 @@ if __name__ == "__main__":
             terminate_event,
             args.partition,
             is_live_mode,
-            1
+            1000
         )
         consumer.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:
         block_stream_cursor_manager.close()
-        logger.info("Balance indexer consumer stopped")
+        logger.info("Indexer stopped")

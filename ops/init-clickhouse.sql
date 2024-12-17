@@ -36,7 +36,8 @@ CREATE TABLE transactions
 
     -- Indexes for common queries
     INDEX idx_block_time (block_timestamp) TYPE minmax GRANULARITY 1,
-    INDEX idx_tx_lookup (tx_id, tx_index) TYPE set(100000) GRANULARITY 1,
+    INDEX idx_block_height (block_height) TYPE minmax GRANULARITY 1,
+    INDEX idx_tx_lookup (tx_id) TYPE set(100000) GRANULARITY 1,
     INDEX idx_fees (fee_amount) TYPE minmax GRANULARITY 1
 )
 ENGINE = ReplacingMergeTree
@@ -55,7 +56,6 @@ AS SELECT * FROM transactions;
 -- Transaction inputs table
 CREATE TABLE transaction_inputs
 (
-    id UInt64,
     tx_id String,
     block_height UInt32,
     address String,
@@ -64,13 +64,11 @@ CREATE TABLE transaction_inputs
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(block_height, 52560)
-ORDER BY (block_height, id, tx_id)
-SETTINGS index_granularity = 8192;
+ORDER BY (block_height, tx_id);
 
 -- Transaction outputs table
 CREATE TABLE transaction_outputs
 (
-    id UInt64,
     tx_id String,
     block_height UInt32,
     address String,
@@ -79,8 +77,7 @@ CREATE TABLE transaction_outputs
 )
 ENGINE = ReplacingMergeTree
 PARTITION BY intDiv(block_height, 52560)
-ORDER BY (block_height, id, tx_id)
-SETTINGS index_granularity = 8192;
+ORDER BY (block_height, tx_id);
 
 -- Balance changes table
 CREATE TABLE balance_changes

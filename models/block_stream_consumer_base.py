@@ -170,13 +170,19 @@ class BlockStreamConsumerBase:
                 if not messages:
                     consecutive_empty_polls += 1
 
-                    if self.is_live_mode and consecutive_empty_polls >= 3 and self.last_processed_block[
-                        self.current_partition] > 0:
+                    if self.is_live_mode and consecutive_empty_polls >= 3 and self.last_processed_block[self.current_partition] > 0:
                         _, end_block = self.get_partition_range(self.current_partition)
                         if self.last_processed_block[self.current_partition] >= end_block:
                             next_partition = self.current_partition + 1
                             if self.check_next_partition(next_partition):
                                 self.move_to_next_partition(next_partition)
+                    if not self.is_live_mode and consecutive_empty_polls >= 100:
+                        logger.info("Archive mode: No new messages, shutting down")
+                        break
+
+                    if consecutive_empty_polls % 10 == 0:
+                        logger.debug("No messages received")
+
                     continue
 
                 consecutive_empty_polls = 0

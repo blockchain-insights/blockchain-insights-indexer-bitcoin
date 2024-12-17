@@ -7,7 +7,7 @@ from loguru import logger
 from models.balance_tracking.transaction_indexer import TransactionIndexer
 from models.block_stream_consumer_base import BlockStreamConsumerBase
 from models.block_stream_cursor import BlockStreamCursorManager
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 
 class BlockStreamConsumer(BlockStreamConsumerBase):
@@ -16,22 +16,29 @@ class BlockStreamConsumer(BlockStreamConsumerBase):
                  block_stream_cursor_manager: BlockStreamCursorManager,
                  transaction_indexer: TransactionIndexer,
                  terminate_event):
-        super().__init__(kafka_config, block_stream_cursor_manager, terminate_event, 0)
+
+        super().__init__(
+            kafka_config=kafka_config,
+            block_stream_cursor_manager=block_stream_cursor_manager,
+            terminate_event=terminate_event,
+            consumer_name='balance-tracking-consumer',
+            partition=0,
+            is_live_mode=True,
+            batch_size=1000
+        )
+
         self.transaction_indexer = transaction_indexer
 
-    def index_transaction(self, tx):
-        self.transaction_indexer.index_transaction(tx)
+    def process_transactions(self, transactions: List[Dict]):
+        self.transaction_indexer.index_transactions_in_batches(transactions)
 
 
 if __name__ == "__main__":
     terminate_event = threading.Event()
 
     def shutdown_handler(signum, frame):
-        logger.info(
-            "Shutdown signal received. Waiting for current processing to complete."
-        )
+        logger.info("Shutdown signal received. Waiting for current processing to complete.")
         terminate_event.set()
-
 
     load_dotenv()
 
@@ -39,7 +46,6 @@ if __name__ == "__main__":
 
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
-
 
     def patch_record(record):
         record["extra"]["service"] = service_name
@@ -73,17 +79,23 @@ if __name__ == "__main__":
 
     block_stream_cursor_manager = BlockStreamCursorManager(consumer_name=service_name, db_url=db_url)
 
-    timeseries_db_url = os.getenv("TIMESERIES_DB_CONNECTION_STRING", "postgresql://postgres:changeit456$@localhost:5432/timeseries")
-    transaction_indexer = TransactionIndexer(timeseries_db_url)
+    connection_params = {
+        "host": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_HOST", "localhost"),
+        "port": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PORT", "8123"),
+        "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
+        "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
+        "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$")
+    }
+    transaction_indexer = TransactionIndexer(connection_params)
 
     kafka_config = {
         'bootstrap.servers': redpanda_bootstrap_servers,
         'group.id': service_name,
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False,
-        'max.partition.fetch.bytes': 10485760,  # 10MB
-        'fetch.max.bytes': 10485760,  # Modern setting replacing fetch.message.max.bytes
-        'receive.message.max.bytes': 10486272  # Must be >= fetch.max.bytes + 512
+        'max.partition.fetch.bytes': 134217728,
+        'fetch.max.bytes': 134217728,
+        'receive.message.max.bytes': 134218240,  # + 512 bytes
     }
 
     try:
@@ -91,11 +103,11 @@ if __name__ == "__main__":
             kafka_config,
             block_stream_cursor_manager,
             transaction_indexer,
-            terminate_event
+            terminate_event,
         )
         consumer.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}")
     finally:
         block_stream_cursor_manager.close()
-        logger.info("Balance indexer consumer stopped")
+        logger.info("Indexer stopped")
