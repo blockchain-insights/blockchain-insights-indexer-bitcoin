@@ -7,6 +7,7 @@ import json
 import traceback
 from abc import ABC, abstractmethod
 
+from models import BLOCK_STREAM_TOPIC_NAME
 from models.block_stream_cursor import BlockStreamCursorManager
 
 
@@ -171,6 +172,35 @@ class LiveBlockStreamConsumer(BlockStreamConsumerBase):
         low, high = self.consumer.get_watermark_offsets(tp)
         return high > 0
 
+    def find_starting_partition(self) -> tuple[int, int]:
+        """Find the most appropriate starting partition and offset"""
+        # Get metadata about all partitions
+        cluster_metadata = self.consumer.list_topics(BLOCK_STREAM_TOPIC_NAME)
+        topic_metadata = cluster_metadata.topics[BLOCK_STREAM_TOPIC_NAME]
+        partitions = sorted(topic_metadata.partitions.keys())
+
+        latest_partition = None
+        latest_offset = -1
+
+        # Check each partition for activity and stored cursor
+        for partition in partitions:
+            offset = self.initialize_partition_state(partition)
+            if offset > latest_offset:
+                latest_offset = offset
+                latest_partition = partition
+
+        if latest_partition is not None and latest_offset > 0:
+            # We found a partition with previous activity
+            return latest_partition, latest_offset
+        else:
+            # Find the first partition with messages
+            for partition in partitions:
+                if self.check_next_partition(partition):
+                    return partition, 0
+
+        # Fallback to first partition if nothing else found
+        return partitions[0], 0
+
     def move_to_next_partition(self, next_partition: int):
         try:
             current_partition = self.current_partition
@@ -194,42 +224,20 @@ class LiveBlockStreamConsumer(BlockStreamConsumerBase):
                          error=str(e))
             raise e
 
-    def on_assign(self, consumer, partitions):
-        """Restore from the last known state and continue processing"""
-        sorted_partitions = sorted(partitions, key=lambda p: p.partition)
-        latest_partition = None
-        latest_offset = -1
-
-        # Find the partition with the most recent activity
-        for partition in sorted_partitions:
-            starting_offset = self.initialize_partition_state(partition.partition)
-            if starting_offset > latest_offset:
-                latest_offset = starting_offset
-                latest_partition = partition
-
-        if latest_partition and latest_offset > 0:
-            # Resume from last known state
-            self.current_partition = latest_partition.partition
-            latest_partition.offset = latest_offset
-            consumer.assign([latest_partition])
-            logger.info(
-                "Live mode: Resuming from last known state",
-                partition=self.current_partition,
-                offset=latest_offset
-            )
-        else:
-            # Start with the earliest partition
-            first_partition = sorted_partitions[0]
-            self.current_partition = first_partition.partition
-            consumer.assign([first_partition])
-            logger.info(
-                "Live mode: Starting from first partition",
-                partition=self.current_partition
-            )
-
     def run(self):
         try:
-            self.consumer.subscribe([BLOCK_STREAM_TOPIC_NAME], on_assign=self.on_assign)
+            # Initialize with a specific partition instead of using subscribe
+            starting_partition, starting_offset = self.find_starting_partition()
+            self.current_partition = starting_partition
+
+            # Explicitly assign the partition
+            partition = TopicPartition(BLOCK_STREAM_TOPIC_NAME, starting_partition, starting_offset)
+            self.consumer.assign([partition])
+
+            logger.info("Starting live consumer",
+                        partition=starting_partition,
+                        offset=starting_offset)
+
             consecutive_empty_polls = 0
 
             while not self.terminate_event.is_set():
