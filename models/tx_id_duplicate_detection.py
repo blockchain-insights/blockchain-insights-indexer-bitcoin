@@ -7,6 +7,7 @@ import traceback
 from loguru import logger
 from dotenv import load_dotenv
 from node.node import BitcoinNode
+from node.storage import Storage
 
 
 class DuplicateTransactionFinder:
@@ -157,7 +158,16 @@ if __name__ == "__main__":
     state_file = os.getenv("STATE_FILE", "duplicate_finder_state.json")
 
     # Initialize components
-    bitcoin_node = BitcoinNode(bitcoin_node_rpc_url)
+    connection_params = {
+        "host": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_HOST", "localhost"),
+        "port": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PORT", "8123"),
+        "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
+        "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
+        "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$")
+    }
+
+    storage = Storage(connection_params)
+    bitcoin_node = BitcoinNode(bitcoin_node_rpc_url, storage)
     finder = DuplicateTransactionFinder(bitcoin_node, output_file, state_file)
 
     # Setup signal handlers

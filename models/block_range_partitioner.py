@@ -18,11 +18,6 @@ class BlockRangePartitioner:
         partition = block_height // self.range_size
         if partition >= self.num_partitions:
             partition = self.num_partitions - 1
-        if block_height % self.range_size == 0:
-            logger.info("Reached partition boundary",
-                        block_height=block_height,
-                        partition=partition,
-                        year_number=partition + 1)
         return int(partition)
 
     def get_partition_range(self, partition):
@@ -31,3 +26,18 @@ class BlockRangePartitioner:
         if partition == self.num_partitions - 1:
             end = float('inf')
         return (start, end)
+
+    def align_height_to_partition(self, height: int, round_up: bool = False) -> int:
+        """Align height to partition boundary"""
+        partition = height // self.range_size
+        if round_up:
+            return (partition + 1) * self.range_size
+        return partition * self.range_size
+
+    def get_partition_for_range(self, start_height: int, end_height: int = None) -> list:
+        """Get list of partitions that cover the given height range"""
+        start_partition = self.__call__(start_height)
+        if end_height is None:
+            return list(range(start_partition, self.num_partitions))
+        end_partition = self.__call__(end_height)
+        return list(range(start_partition, end_partition + 1))

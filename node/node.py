@@ -15,6 +15,7 @@ from .node_utils import (
     create_p2sh_address,
     Transaction, SATOSHI, VOUT, VIN, derive_address
 )
+from .storage import Storage
 
 
 class ExtendedProxy(Proxy):
@@ -96,8 +97,9 @@ class ExtendedProxy(Proxy):
 
 
 class BitcoinNode(Node):
-    def __init__(self, node_rpc_url: str):
+    def __init__(self, node_rpc_url: str, storage: Storage):
         self.node_rpc_url = node_rpc_url
+        self.storage = storage
 
     def get_current_block_height(self):
         proxy = Proxy(service_url=self.node_rpc_url)
@@ -194,7 +196,7 @@ class BitcoinNode(Node):
 
         return tx
 
-    def process_in_memory_txn_for_indexing(self, tx: Transaction):
+    def process_in_memory_txn_for_indexing(self, tx: Transaction, tx_cache: dict):
         input_amounts = {}  # input amounts by address in satoshi
         output_amounts = {}  # output amounts by address in satoshi
 
@@ -202,7 +204,7 @@ class BitcoinNode(Node):
             if vin.tx_id == 0:
                 continue
 
-            address, amount = self.get_address_and_amount_by_txn_id_and_vout_id(vin.tx_id, str(vin.vout_id))
+            address, amount = tx_cache.get((vin.tx_id, vin.vout_id))
             input_amounts[address] = input_amounts.get(address, 0) + amount
 
         for vout in tx.vouts:
@@ -271,13 +273,15 @@ class BitcoinNode(Node):
         results = {}
         missing_txouts = []
 
+        voutputs = self.storage.get_output(txouts)
         for txn_id, vout_id in txouts:
-            missing_txouts.append((txn_id, vout_id))
-            #if (txn_id, vout_id) in self.tx_out_hash_table[txn_id[:3]]:
-            #   address, amount = self.tx_out_hash_table[txn_id[:3]][(txn_id, vout_id)]
-            #  results[(txn_id, vout_id)] = (address, int(amount))
-            #else:
-            #   missing_txouts.append((txn_id, vout_id))
+            key = f"{txn_id}-{vout_id}"
+            vout = voutputs.get(key, None)
+            if vout:
+                address, amount = vout
+                results[(txn_id, vout_id)] = (address, int(amount))
+            else:
+                missing_txouts.append((txn_id, vout_id))
 
         if missing_txouts:
             unique_tx_ids = list(set(tx_id for tx_id, _ in missing_txouts))

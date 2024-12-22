@@ -30,13 +30,20 @@ class BlockStreamCursorManager:
     def close(self):
         self.engine.dispose()
 
-    def get_cursor(self, partition: int) -> Optional[BlockStreamCursor]:
+
+    def get_cursor(self, partition: Optional[int]) -> Optional[BlockStreamCursor]:
         """
         Get cursor for specified consumer and partition.
         Returns None if no cursor exists.
         """
         try:
             with self.Session() as session:
+                if partition is None:
+                    cursor = session.query(BlockStreamCursor).filter(
+                        BlockStreamCursor.consumer_name == self.consumer_name
+                    ).order_by(BlockStreamCursor.partition.desc()).first()
+                    return cursor
+
                 cursor = session.query(BlockStreamCursor).filter(
                     BlockStreamCursor.consumer_name == self.consumer_name,
                     BlockStreamCursor.partition == partition
