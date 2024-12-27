@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 - Added multi streaming support based on block stream partitioning
 - Added clickhouse support, abandoned TimescaleDB
 - Added back and modified vout builder, removed pickle files, added clickhouse support for vout caching
+- Various bug fixes and performance improvements
 
 ## [2.0.3-alpha] - 2024-12-10
 - Block Streamer fixes and performance improvements
