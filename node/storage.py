@@ -10,7 +10,8 @@ class Storage:
             port=int(connection_params.get('port', '8123')),  # Convert port to int
             username=connection_params.get('user', 'default'),  # Changed from username to user
             password=connection_params.get('password', ''),
-            database=connection_params.get('database', 'default')  # Changed from db to database
+            database=connection_params.get('database', 'default'),  # Changed from db to database
+            query_timeout=connection_params.get('query_timeout', 1800)  # Added query_timeout
         )
         self._init_table()
 
