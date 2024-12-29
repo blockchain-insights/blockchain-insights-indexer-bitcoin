@@ -11,7 +11,7 @@ class Storage:
             username=connection_params.get('user', 'default'),  # Changed from username to user
             password=connection_params.get('password', ''),
             database=connection_params.get('database', 'default'),  # Changed from db to database
-            query_timeout=connection_params.get('query_timeout', 1800)  # Added query_timeout
+            settings={'max_execution_time': connection_params.get('max_execution_time', 1800)}  # Changed from max_execution_time to max_execution_time
         )
         self._init_table()
 
