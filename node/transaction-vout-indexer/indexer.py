@@ -237,7 +237,7 @@ if __name__ == '__main__':
         "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
         "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
         "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$"),
-        "query_timeout": int(os.getenv("TRANSACTION_STREAM_CLICKHOUSE_QUERY_TIMEOUT", "1800")),
+        "max_execution_time": int(os.getenv("TRANSACTION_STREAM_CLICKHOUSE_MAX_EXECUTION_TIME", "1800")),
     }
 
     # Create indexer with connection params instead of Storage instance

@@ -12,7 +12,8 @@ class TransactionIndexer:
             port=int(connection_params['port']),  # port needs to be int
             username=connection_params['user'],
             password=connection_params['password'],
-            database=connection_params['database']
+            database=connection_params['database'],
+            settings={'max_execution_time': connection_params['max_execution_time']}
         )
         self.version = int(datetime.now().strftime('%Y%m%d%H%M%S'))
 
