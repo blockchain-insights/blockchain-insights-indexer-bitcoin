@@ -163,7 +163,8 @@ if __name__ == "__main__":
         "port": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PORT", "8123"),
         "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
         "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
-        "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$")
+        "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$"),
+        "query_timeout": int(os.getenv("TRANSACTION_STREAM_CLICKHOUSE_QUERY_TIMEOUT", "1800")),
     }
 
     storage = Storage(connection_params)
