@@ -171,8 +171,6 @@ class TransactionVoutIndexer:
                 logger.warning("Processing terminated before completion")
             else:
                 logger.info(f"Indexing completed in {end_time - start_time} seconds.")
-                # Using main storage instance for final operations
-                self.storage.remove_duplicates()
 
         except Exception as e:
             logger.error(f"Error during processing: {str(e)}")
@@ -194,6 +192,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Construct a hash table from vout csv data.')
     parser.add_argument('--csvpath', required=True, type=str, help='Path to the CSV file')
     parser.add_argument('--threads', type=int, default=64, help='Number of threads to use')
+    parser.add_argument('--cleanup', action='store_true', help='Remove duplicates from the database')
     args = parser.parse_args()
 
     service_name = 'transaction-vout-indexer'
@@ -237,8 +236,16 @@ if __name__ == '__main__':
         "database": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_DATABASE", "transaction_stream"),
         "user": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_USER", "default"),
         "password": os.getenv("TRANSACTION_STREAM_CLICKHOUSE_PASSWORD", "changeit456$"),
-        "max_execution_time": int(os.getenv("TRANSACTION_STREAM_CLICKHOUSE_MAX_EXECUTION_TIME", "1800")),
+        "max_execution_time": int(os.getenv("TRANSACTION_STREAM_CLICKHOUSE_MAX_EXECUTION_TIME", "3600")),
     }
+
+    if args.cleanup:
+        logger.info("Removing duplicates from the database...")
+        storage = Storage(connection_params)
+        storage.remove_duplicates()
+        logger.info("Duplicates removed.")
+        sys.exit(0)
+
 
     # Create indexer with connection params instead of Storage instance
     indexer = TransactionVoutIndexer(connection_params, terminate_event)

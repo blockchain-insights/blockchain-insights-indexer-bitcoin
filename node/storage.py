@@ -11,7 +11,7 @@ class Storage:
             username=connection_params.get('user', 'default'),  # Changed from username to user
             password=connection_params.get('password', ''),
             database=connection_params.get('database', 'default'),  # Changed from db to database
-            settings={'max_execution_time': connection_params.get('max_execution_time', 1800)}  # Changed from max_execution_time to max_execution_time
+            settings={'max_execution_time': connection_params.get('max_execution_time', 3600)}  # Changed from max_execution_time to max_execution_time
         )
         self._init_table()
 
@@ -28,7 +28,7 @@ class Storage:
         ''')
 
     def remove_duplicates(self):
-        self.client.command('''OPTIMIZE TABLE tx_outputs FINAL;''')
+        self.client.command('''OPTIMIZE TABLE tx_outputs DEDUPLICATE;''')
 
     def batch_insert(self, records):
         """Insert a batch of records into the database with proper error handling."""
